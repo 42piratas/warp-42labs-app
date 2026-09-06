@@ -367,18 +367,6 @@ fn test_collect_bounded_animated_frames_truncates_on_frame_count() {
 }
 
 #[test]
-fn test_collect_bounded_animated_frames_does_not_warn_when_count_matches_exactly() {
-    let gif_bytes = make_animated_gif_bytes(2, 4, 4, 100);
-    let decoder = GifDecoder::new(std::io::Cursor::new(gif_bytes.as_slice()))
-        .expect("synthetic gif should decode");
-
-    let frames = collect_bounded_animated_frames_with_limits(decoder.into_frames(), 2, usize::MAX)
-        .expect("exact frame count should not error");
-
-    assert_eq!(frames.len(), 2);
-}
-
-#[test]
 fn test_collect_bounded_animated_frames_stops_pulling_once_byte_budget_rejects_a_frame() {
     // Frame 1 (64 bytes) is always kept. Frame 2 (64 bytes) pushes the running total to 128,
     // over the 100-byte budget, so it is decoded but rejected. If the implementation kept
@@ -551,6 +539,49 @@ fn test_within_limit_static_webp_still_decodes() {
         panic!("Expected a static bitmap");
     };
     assert_eq!(image.size(), Vector2I::new(16, 16));
+}
+
+#[test]
+fn test_check_webp_decode_alloc_budget_rejects_within_dimension_but_over_alloc_budget() {
+    // 8000x8000 stays within MAX_IMAGE_DECODE_DIMENSION on both axes (so the dimension check
+    // alone would not catch it), but its RGBA byte count (256,000,000) exceeds
+    // MAX_IMAGE_DECODE_ALLOC_BYTES (200 MiB).
+    assert!(check_webp_decode_alloc_budget(8000, 8000).is_err());
+}
+
+#[test]
+fn test_check_webp_decode_alloc_budget_accepts_within_budget() {
+    assert!(check_webp_decode_alloc_budget(16, 16).is_ok());
+}
+
+#[test]
+fn test_check_webp_decode_alloc_budget_handles_overflow_safely() {
+    // width * height * 4 overflows u64 for dimensions this large; the checked arithmetic must
+    // still reject it rather than panicking or wrapping around to a small, accepted value.
+    assert!(check_webp_decode_alloc_budget(u32::MAX, u32::MAX).is_err());
+}
+
+#[test]
+fn test_oversized_webp_allocation_is_rejected_before_decoding() {
+    // 8192x6500 is within MAX_IMAGE_DECODE_DIMENSION on both axes, so the dimension check alone
+    // does not catch it, but its RGBA byte count (~203 MiB) exceeds MAX_IMAGE_DECODE_ALLOC_BYTES
+    // (200 MiB). WebPDecoder never enforces max_alloc itself, so this exercises our own
+    // preflight end to end.
+    let width = MAX_IMAGE_DECODE_DIMENSION;
+    let height = 6500;
+    let img = image::RgbaImage::from_pixel(width, height, image::Rgba([7, 8, 9, 255]));
+    let mut bytes = Vec::new();
+    image::codecs::webp::WebPEncoder::new_lossless(&mut bytes)
+        .encode(img.as_raw(), width, height, image::ExtendedColorType::Rgba8)
+        .expect("encode synthetic oversized webp");
+    drop(img);
+
+    let result = ImageType::try_from_bytes(&bytes);
+
+    assert!(
+        result.is_err(),
+        "a WebP within dimension limits but over the allocation budget should be rejected, not allocated for"
+    );
 }
 
 #[test]

@@ -65,6 +65,29 @@ fn image_decode_limits() -> Limits {
     limits
 }
 
+/// `image`'s `WebPDecoder` inherits the default `ImageDecoder::set_limits`, which only checks
+/// `max_image_width`/`max_image_height` and never enforces `max_alloc` (the underlying
+/// `image_webp` decoder does not accept a byte budget at all). The dimension check alone is not
+/// enough: an image within `MAX_IMAGE_DECODE_DIMENSION` on both axes can still exceed
+/// `MAX_IMAGE_DECODE_ALLOC_BYTES` (e.g. 8192x8192 RGBA is 256 MiB). This preflights the RGBA byte
+/// count ourselves, using checked `u64` arithmetic since `width`/`height` come directly from an
+/// untrusted image header and a `usize`/`u32` overflow here would silently defeat the check.
+fn check_webp_decode_alloc_budget(width: u32, height: u32) -> Result<()> {
+    let byte_count = u64::from(width)
+        .checked_mul(u64::from(height))
+        .and_then(|pixel_count| pixel_count.checked_mul(4));
+
+    match byte_count {
+        Some(byte_count) if byte_count <= MAX_IMAGE_DECODE_ALLOC_BYTES => Ok(()),
+        _ => Err(
+            image::ImageError::Limits(image::error::LimitError::from_kind(
+                image::error::LimitErrorKind::InsufficientMemory,
+            ))
+            .into(),
+        ),
+    }
+}
+
 static SVG_FONT_DB: LazyLock<Arc<usvg::fontdb::Database>> = LazyLock::new(|| {
     let mut fontdb = usvg::fontdb::Database::new();
     fontdb.load_system_fonts();
@@ -337,15 +360,14 @@ fn collect_bounded_animated_frames_with_limits(
 ) -> Result<Vec<Frame>> {
     let mut collected: Vec<Frame> = Vec::new();
     let mut total_bytes: usize = 0;
-    let mut truncated = false;
+    let mut truncation_reason: Option<&'static str> = None;
 
     loop {
         if collected.len() >= max_frame_count {
-            // Only report truncation if another frame genuinely exists; an animation with
-            // exactly `max_frame_count` frames should not warn about dropping anything.
-            if frames.next().is_some() {
-                truncated = true;
-            }
+            // Report that the cap was reached, not that a frame was dropped: whether another
+            // frame actually follows is unknown without pulling it, which would defeat the
+            // point of the cap and could mask a decode error as a successful truncation.
+            truncation_reason = Some("reached the frame-count cap");
             break;
         }
 
@@ -358,7 +380,7 @@ fn collect_bounded_animated_frames_with_limits(
         // Always keep the first frame, even if it alone exceeds the budget, so the image
         // still has something to render.
         if !collected.is_empty() && total_bytes.saturating_add(frame_bytes) > max_decoded_bytes {
-            truncated = true;
+            truncation_reason = Some("exceeded the decoded-byte budget");
             break;
         }
 
@@ -366,9 +388,9 @@ fn collect_bounded_animated_frames_with_limits(
         collected.push(frame);
     }
 
-    if truncated {
+    if let Some(reason) = truncation_reason {
         log::warn!(
-            "Truncated animated image decoding after {} frame(s) / {} decoded byte(s); keeping a shorter loop instead of the full animation",
+            "Truncated animated image decoding after {} frame(s) / {} decoded byte(s): {reason}",
             collected.len(),
             total_bytes
         );
@@ -452,6 +474,8 @@ impl Asset for ImageType {
             Ok(ImageFormat::WebP) => {
                 let mut decoder = WebPDecoder::new(std::io::Cursor::new(data))?;
                 decoder.set_limits(image_decode_limits())?;
+                let (width, height) = decoder.dimensions();
+                check_webp_decode_alloc_budget(width, height)?;
                 if decoder.has_animation() {
                     let frames = collect_bounded_animated_frames(decoder.into_frames())?;
                     Ok(ImageType::AnimatedBitmap {
