@@ -434,9 +434,10 @@ fn test_oversized_subscribed_file_reloads_after_shrinking() {
         ));
         files.read(&app, |model, _| {
             assert!(model.version(file_id).is_some());
+            let stored_path = model.file_path(file_id).expect("stored path");
             assert_eq!(
                 model.registered_watch_path(file_id),
-                FileModel::watch_path_for(&path).as_deref()
+                FileModel::watch_path_for(&stored_path).as_deref()
             );
         });
 
