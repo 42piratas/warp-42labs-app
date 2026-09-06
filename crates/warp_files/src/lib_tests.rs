@@ -432,18 +432,19 @@ fn test_oversized_subscribed_file_reloads_after_shrinking() {
             receiver.recv().await.expect("receive load failure"),
             TestFileModelEvent::FailedToLoad(_)
         ));
-        files.read(&app, |model, _| {
+        let stored_path = files.read(&app, |model, _| {
             assert!(model.version(file_id).is_some());
             let stored_path = model.file_path(file_id).expect("stored path");
             assert_eq!(
                 model.registered_watch_path(file_id),
                 FileModel::watch_path_for(&stored_path).as_deref()
             );
+            stored_path
         });
 
         std::fs::write(&path, "now loadable").expect("shrink file");
         files.update(&mut app, |model, ctx| {
-            model.reload_file_paths(HashSet::from([path.clone()]), ctx);
+            model.reload_file_paths(HashSet::from([stored_path.clone()]), ctx);
         });
 
         match receiver.recv().await.expect("receive file update") {
