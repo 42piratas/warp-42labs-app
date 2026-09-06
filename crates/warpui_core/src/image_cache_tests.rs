@@ -437,6 +437,123 @@ fn test_collect_bounded_animated_frames_propagates_decode_error_before_budget() 
 }
 
 #[test]
+fn test_image_decode_limits_match_configured_constants() {
+    let limits = image_decode_limits();
+    assert_eq!(limits.max_image_width, Some(MAX_IMAGE_DECODE_DIMENSION));
+    assert_eq!(limits.max_image_height, Some(MAX_IMAGE_DECODE_DIMENSION));
+    assert_eq!(limits.max_alloc, Some(MAX_IMAGE_DECODE_ALLOC_BYTES));
+}
+
+#[test]
+fn test_image_decode_limits_reject_oversized_dimensions() {
+    let limits = image_decode_limits();
+    assert!(
+        limits
+            .check_dimensions(MAX_IMAGE_DECODE_DIMENSION + 1, 10)
+            .is_err()
+    );
+    assert!(
+        limits
+            .check_dimensions(10, MAX_IMAGE_DECODE_DIMENSION + 1)
+            .is_err()
+    );
+    assert!(
+        limits
+            .check_dimensions(MAX_IMAGE_DECODE_DIMENSION, MAX_IMAGE_DECODE_DIMENSION)
+            .is_ok()
+    );
+}
+
+#[test]
+fn test_image_decode_limits_reject_oversized_allocation() {
+    let mut over_budget = image_decode_limits();
+    assert!(
+        over_budget
+            .reserve(MAX_IMAGE_DECODE_ALLOC_BYTES + 1)
+            .is_err()
+    );
+
+    let mut at_budget = image_decode_limits();
+    assert!(at_budget.reserve(MAX_IMAGE_DECODE_ALLOC_BYTES).is_ok());
+}
+
+/// Builds a minimal, valid GIF (header + logical screen descriptor + trailer, no color table or
+/// frames) declaring the given logical screen dimensions. Since GIF dimension limits are checked
+/// against the header alone, this exercises decode-time rejection without needing to encode any
+/// actual pixel data. Trailing padding bytes are required: the `gif` crate's streaming parser
+/// peeks one byte ahead of the trailer marker before recognizing end-of-stream, so a stream
+/// ending exactly at the trailer byte reads as a truncated file rather than a complete one.
+fn make_gif_header_only_bytes(width: u16, height: u16) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"GIF89a");
+    bytes.extend_from_slice(&width.to_le_bytes());
+    bytes.extend_from_slice(&height.to_le_bytes());
+    bytes.push(0x00); // packed fields: no global color table
+    bytes.push(0x00); // background color index
+    bytes.push(0x00); // pixel aspect ratio
+    bytes.push(0x3B); // trailer, no image blocks
+    bytes.extend_from_slice(&[0x00; 4]); // trailing padding; see doc comment above
+    bytes
+}
+
+#[test]
+fn test_oversized_gif_dimensions_are_rejected_before_decoding() {
+    let oversized = make_gif_header_only_bytes((MAX_IMAGE_DECODE_DIMENSION + 1) as u16, 100);
+
+    let result = ImageType::try_from_bytes(&oversized);
+
+    assert!(
+        result.is_err(),
+        "a GIF declaring dimensions beyond the decode limit should be rejected, not allocated for"
+    );
+}
+
+#[test]
+fn test_within_limit_gif_dimensions_still_decode() {
+    let within_limit = make_gif_header_only_bytes(100, 100);
+
+    let result = ImageType::try_from_bytes(&within_limit);
+
+    assert!(
+        result.is_ok(),
+        "a GIF within the decode limit should still decode successfully"
+    );
+}
+
+#[test]
+fn test_within_limit_jpeg_still_decodes() {
+    let img = image::RgbaImage::from_pixel(16, 16, image::Rgba([10, 20, 30, 255]));
+    let mut bytes = Vec::new();
+    image::DynamicImage::ImageRgba8(img)
+        .write_to(
+            &mut std::io::Cursor::new(&mut bytes),
+            image::ImageFormat::Jpeg,
+        )
+        .expect("encode synthetic jpeg");
+
+    let image_type = ImageType::try_from_bytes(&bytes).expect("within-limit jpeg should decode");
+    let ImageType::StaticBitmap { image } = image_type else {
+        panic!("Expected a static bitmap");
+    };
+    assert_eq!(image.size(), Vector2I::new(16, 16));
+}
+
+#[test]
+fn test_within_limit_static_webp_still_decodes() {
+    let img = image::RgbaImage::from_pixel(16, 16, image::Rgba([10, 20, 30, 255]));
+    let mut bytes = Vec::new();
+    image::codecs::webp::WebPEncoder::new_lossless(&mut bytes)
+        .encode(img.as_raw(), 16, 16, image::ExtendedColorType::Rgba8)
+        .expect("encode synthetic webp");
+
+    let image_type = ImageType::try_from_bytes(&bytes).expect("within-limit webp should decode");
+    let ImageType::StaticBitmap { image } = image_type else {
+        panic!("Expected a static bitmap");
+    };
+    assert_eq!(image.size(), Vector2I::new(16, 16));
+}
+
+#[test]
 fn test_first_frame_preview_returns_static_for_animated_gif() {
     let asset_cache = new_asset_cache();
     let image_cache = ImageCache::new();

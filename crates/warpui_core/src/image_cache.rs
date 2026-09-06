@@ -9,7 +9,9 @@ use anyhow::{Result, anyhow};
 use image::codecs::gif::GifDecoder;
 use image::codecs::webp::WebPDecoder;
 use image::imageops::FilterType;
-use image::{AnimationDecoder, DynamicImage, Frame, Frames, ImageBuffer, ImageFormat};
+use image::{
+    AnimationDecoder, DynamicImage, Frame, Frames, ImageBuffer, ImageDecoder, ImageFormat, Limits,
+};
 use itertools::Itertools;
 use parking_lot::{RwLock, RwLockUpgradableReadGuard};
 use pathfinder_geometry::vector::Vector2I;
@@ -33,9 +35,35 @@ const MAX_ANIMATED_IMAGE_FRAME_COUNT: usize = 512;
 /// a cap a single large/long animated GIF or WebP can balloon memory by gigabytes. 256 MiB
 /// comfortably covers ordinary GIFs/WebPs pasted into chat, markdown, or notebooks (typically
 /// well under a few MB of decoded frames in total) while still bounding worst-case memory for
-/// pathological inputs. This bounds the retained set only: a single frame's own decode
-/// allocation happens before this budget is checked and is not itself governed by it.
+/// pathological inputs. This bounds the *retained* set across all frames; an individual frame's
+/// own decode allocation is instead bounded by `MAX_IMAGE_DECODE_ALLOC_BYTES` below.
 const MAX_ANIMATED_IMAGE_DECODED_BYTES: usize = 256 * 1024 * 1024;
+
+/// Maximum width/height, in pixels, any decoder will allow for a single image or animation
+/// frame. Rejects a header-declared decompression bomb (e.g. an image claiming a 50000x50000
+/// canvas) before any pixel buffer for it is allocated. 8192 is far above real content (a full
+/// "8K" UHD frame is 7680x4320) while staying at or below the maximum texture size most GPUs
+/// support.
+const MAX_IMAGE_DECODE_DIMENSION: u32 = 8192;
+
+/// Maximum bytes a decoder may allocate for a single image or animation frame while decoding
+/// (checked against `image::Limits::max_alloc`). This is independent of
+/// `MAX_ANIMATED_IMAGE_DECODED_BYTES` above, which bounds the *retained* set of already-decoded
+/// animated frames; this instead bounds each individual decode allocation, before it happens. A
+/// full "8K" UHD RGBA frame (7680x4320) is ~132 MB, so 200 MiB comfortably covers real content
+/// while sitting far below the gigabyte-scale allocations a decompression bomb would otherwise
+/// trigger.
+const MAX_IMAGE_DECODE_ALLOC_BYTES: u64 = 200 * 1024 * 1024;
+
+/// The decode-time resource limits applied to every image/animation decoder before it decodes
+/// any pixel data, so an oversized or bomb-like input is rejected instead of allocated for.
+fn image_decode_limits() -> Limits {
+    let mut limits = Limits::default();
+    limits.max_image_width = Some(MAX_IMAGE_DECODE_DIMENSION);
+    limits.max_image_height = Some(MAX_IMAGE_DECODE_DIMENSION);
+    limits.max_alloc = Some(MAX_IMAGE_DECODE_ALLOC_BYTES);
+    limits
+}
 
 static SVG_FONT_DB: LazyLock<Arc<usvg::fontdb::Database>> = LazyLock::new(|| {
     let mut fontdb = usvg::fontdb::Database::new();
@@ -298,8 +326,10 @@ fn collect_bounded_animated_frames(frames: Frames<'_>) -> Result<Vec<Frame>> {
 /// Implements [`collect_bounded_animated_frames`] with the limits as parameters.
 ///
 /// When a limit is hit, the frames decoded so far are kept as a (shorter) looping animation
-/// rather than failing the whole image. Always keeps at least the first successfully decoded
-/// frame, even if it alone exceeds the byte budget, so the image still has something to render.
+/// rather than failing the whole image. Among frames that successfully decode, the first is
+/// always retained regardless of size, so the image still has something to render; a frame that
+/// fails to decode (e.g. because it exceeds the decoder's own resource limits) still propagates
+/// as an error, since there is nothing to retain in that case.
 fn collect_bounded_animated_frames_with_limits(
     mut frames: Frames<'_>,
     max_frame_count: usize,
@@ -398,29 +428,30 @@ impl Asset for ImageType {
 
         match image::guess_format(data) {
             Ok(ImageFormat::Jpeg) => {
-                let img = image::ImageReader::with_format(
+                let mut reader = image::ImageReader::with_format(
                     std::io::Cursor::new(data),
                     image::ImageFormat::Jpeg,
-                )
-                .decode()?
-                .into_rgba8();
+                );
+                reader.limits(image_decode_limits());
+                let img = reader.decode()?.into_rgba8();
                 Ok(ImageType::StaticBitmap {
                     image: Arc::new(StaticImage { img }),
                 })
             }
             Ok(ImageFormat::Png) => {
-                let img = image::ImageReader::with_format(
+                let mut reader = image::ImageReader::with_format(
                     std::io::Cursor::new(data),
                     image::ImageFormat::Png,
-                )
-                .decode()?
-                .into_rgba8();
+                );
+                reader.limits(image_decode_limits());
+                let img = reader.decode()?.into_rgba8();
                 Ok(ImageType::StaticBitmap {
                     image: Arc::new(StaticImage { img }),
                 })
             }
             Ok(ImageFormat::WebP) => {
-                let decoder = WebPDecoder::new(std::io::Cursor::new(data))?;
+                let mut decoder = WebPDecoder::new(std::io::Cursor::new(data))?;
+                decoder.set_limits(image_decode_limits())?;
                 if decoder.has_animation() {
                     let frames = collect_bounded_animated_frames(decoder.into_frames())?;
                     Ok(ImageType::AnimatedBitmap {
@@ -434,7 +465,8 @@ impl Asset for ImageType {
                 }
             }
             Ok(ImageFormat::Gif) => {
-                let decoder = GifDecoder::new(std::io::Cursor::new(data))?;
+                let mut decoder = GifDecoder::new(std::io::Cursor::new(data))?;
+                decoder.set_limits(image_decode_limits())?;
                 let frames = collect_bounded_animated_frames(decoder.into_frames())?;
                 Ok(ImageType::AnimatedBitmap {
                     image: Arc::new(AnimatedImage::from(frames)),
