@@ -87,6 +87,7 @@ mod common;
 mod config_file;
 pub(crate) mod driver;
 mod environment;
+pub(crate) mod environment_snapshot;
 mod federate;
 mod harness_support;
 #[cfg(not(target_family = "wasm"))]
@@ -854,9 +855,13 @@ impl AgentDriverRunner {
         ))
         .await?
         .token;
-        ai_client
-            .get_task_git_credentials(task_id_str, workload_token)
-            .await
+        // Bootstrap has no prior credential store, so a one-host success would
+        // leave the other host unauthenticated for the first clone. Partial
+        // refresh is reserved for later cycles after stores exist.
+        let response = ai_client
+            .get_task_git_credentials(task_id_str, workload_token, false)
+            .await?;
+        driver::git_credentials::credentials_for_bootstrap(response)
     }
 
     async fn bootstrap_git_credentials_for_task(
@@ -864,8 +869,12 @@ impl AgentDriverRunner {
         task_id_str: &str,
         args: &RunAgentArgs,
     ) -> Result<(), AgentDriverError> {
-        if warp_isolation_platform::detect().is_none() && args.configure_git_credentials_with_github
-        {
+        // The gh CLI only covers github.com, so this must not replace the
+        // server fetch below — other forges (GitLab, Azure DevOps) get their
+        // credentials exclusively from the server.
+        let git_credentials_configured_with_gh = warp_isolation_platform::detect().is_none()
+            && args.configure_git_credentials_with_github;
+        if git_credentials_configured_with_gh {
             foreground
                 .spawn(|_, _| {
                     command::blocking::Command::new("gh")
@@ -879,7 +888,6 @@ impl AgentDriverRunner {
                 })
                 .await?
                 .map(|_| ())?;
-            return Ok(());
         }
 
         if !FeatureFlag::GitCredentialRefresh.is_enabled() {
@@ -916,6 +924,15 @@ impl AgentDriverRunner {
                     }) =>
             {
                 log::debug!("Skipping git credentials bootstrap: {err}");
+                return Ok(());
+            }
+            Err(err) if git_credentials_configured_with_gh => {
+                // gh already configured github.com above, so a failed server
+                // fetch degrades to GitHub-only credentials instead of
+                // failing a run that previously worked without the fetch.
+                log::warn!(
+                    "Failed to fetch git credentials; continuing with gh-configured GitHub credentials only: {err:#}"
+                );
                 return Ok(());
             }
             Err(err) => {
@@ -1059,6 +1076,8 @@ impl AgentDriverRunner {
                     cloud_providers: Vec::new(),
                     environment: None,
                     additional_source_repos: Vec::new(),
+                    repository_head_overrides: args.repository_head_overrides.clone(),
+                    remove_repository_origins: args.remove_repository_origins,
                     selected_harness: args.harness,
                     third_party_harness_model_config,
                     snapshot_disabled: args.snapshot.no_snapshot.then_some(true),
@@ -1128,6 +1147,17 @@ impl AgentDriverRunner {
                 Self::resolve_environment(foreground, environment_id, &mut driver_options),
             )
             .await?;
+        driver::environment::validate_repository_head_overrides(
+            &driver::environment::merge_repos_deduped(
+                driver_options
+                    .environment
+                    .as_ref()
+                    .map(crate::ai::cloud_environments::AmbientAgentEnvironment::effective_repos)
+                    .unwrap_or_default(),
+                driver_options.additional_source_repos.clone(),
+            )?,
+            &driver_options.repository_head_overrides,
+        )?;
 
         Ok((driver_options, task, task_conversation_id))
     }
@@ -1231,7 +1261,7 @@ impl AgentDriverRunner {
         };
 
         // Handoff snapshot attachments for follow-up executions are written to
-        // {attachments_dir}/handoff/{uuid} so the server-side rehydration prompt
+        // {attachments_dir}/handoff/{filename} so the server-side rehydration prompt
         // references resolve to real files.
         let handoff_snapshot_ai_client = ai_client.clone();
         let handoff_snapshot_server_api = server_api.clone();
