@@ -3389,12 +3389,33 @@ impl BlocklistAIController {
                     );
                 });
             }
-            Some(warp_multi_agent_api::response_event::stream_finished::Reason::QuotaLimit(_)) => {
+            Some(warp_multi_agent_api::response_event::stream_finished::Reason::QuotaLimit(
+                details,
+            )) => {
+                use warp_multi_agent_api::LlmProvider;
+                let provider = details.provider.try_into().ok().and_then(
+                    |provider: LlmProvider| match provider {
+                        LlmProvider::Google => Some("Google"),
+                        LlmProvider::Anthropic => Some("Anthropic"),
+                        LlmProvider::Openai => Some("OpenAI"),
+                        LlmProvider::Xai => Some("xAI"),
+                        LlmProvider::Openrouter => Some("OpenRouter"),
+                        LlmProvider::AwsBedrock => Some("AWS Bedrock"),
+                        LlmProvider::GeminiEnterprise => Some("Gemini Enterprise"),
+                        LlmProvider::Unknown => None,
+                    },
+                );
+                let error = match provider {
+                    Some(provider) => RenderableAIError::ProviderQuotaLimit {
+                        provider: provider.to_string(),
+                    },
+                    None => RenderableAIError::QuotaLimit {
+                        user_display_message: None,
+                    },
+                };
                 history_model.update(ctx, |history_model, ctx| {
                     history_model.mark_response_stream_completed_with_error(
-                        RenderableAIError::QuotaLimit {
-                            user_display_message: None,
-                        },
+                        error,
                         /*recovery_pending*/ false,
                         stream_id,
                         conversation_id,
