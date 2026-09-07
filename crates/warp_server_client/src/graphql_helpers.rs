@@ -28,31 +28,20 @@ where
     })
 }
 
-fn apply_request_team_scope(
-    mut options: RequestOptions,
-    team_uid: Option<String>,
-) -> RequestOptions {
-    if let Some(team_uid) = team_uid {
-        options
-            .headers
-            .insert(TEAM_UID_HEADER.to_string(), team_uid);
-    }
-    options
-}
 pub fn send_team_scoped_graphql_request<'a, QF: 'a, O>(
     base_client: &'a BaseClient,
     operation: O,
     timeout: Option<Duration>,
-    team_uid: Option<String>,
+    team_uid: String,
 ) -> BoxFuture<'a, Result<QF>>
 where
     O: Operation<QF> + Send + 'a,
 {
     Box::pin(async move {
-        let options = apply_request_team_scope(
-            base_client.graphql_request_options(timeout).await?,
-            team_uid,
-        );
+        let mut options = base_client.graphql_request_options(timeout).await?;
+        options
+            .headers
+            .insert(TEAM_UID_HEADER.to_string(), team_uid);
         send_graphql_request_with_options(base_client, operation, options).await
     })
 }

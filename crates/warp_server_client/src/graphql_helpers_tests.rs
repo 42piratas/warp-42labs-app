@@ -32,44 +32,6 @@ fn base_client(auth_state: AuthState) -> (BaseClient, async_channel::Receiver<Au
 }
 
 #[test]
-fn team_scoped_graphql_request_preserves_authentication_and_sets_team_header() {
-    let (base_client, event_receiver) = externally_authenticated_base_client("daemon-token");
-    let send_count = Arc::new(AtomicUsize::new(0));
-
-    block_on(send_team_scoped_graphql_request(
-        &base_client,
-        FakeGraphqlOperation::successful_with_team(
-            Some("daemon-token"),
-            Some("team-uid-123"),
-            send_count.clone(),
-        ),
-        None,
-        Some("team-uid-123".to_string()),
-    ))
-    .unwrap();
-
-    assert_eq!(send_count.load(Ordering::SeqCst), 1);
-    assert_no_events(&event_receiver);
-}
-
-#[test]
-fn teamless_graphql_request_preserves_authentication_and_omits_team_header() {
-    let (base_client, event_receiver) = externally_authenticated_base_client("daemon-token");
-    let send_count = Arc::new(AtomicUsize::new(0));
-
-    block_on(send_team_scoped_graphql_request(
-        &base_client,
-        FakeGraphqlOperation::successful_with_team(Some("daemon-token"), None, send_count.clone()),
-        None,
-        None,
-    ))
-    .unwrap();
-
-    assert_eq!(send_count.load(Ordering::SeqCst), 1);
-    assert_no_events(&event_receiver);
-}
-
-#[test]
 fn refreshable_user_not_in_context_emits_account_disabled_event() {
     let (base_client, event_receiver) = refreshable_base_client();
     let send_count = Arc::new(AtomicUsize::new(0));
@@ -139,14 +101,15 @@ impl FakeGraphqlOperation {
             result: FakeGraphqlResult::Success,
         }
     }
-    fn successful_with_team(
+
+    fn successful_for_team(
         expected_auth_token: Option<&str>,
-        expected_team_uid: Option<&str>,
+        expected_team_uid: &str,
         send_count: Arc<AtomicUsize>,
     ) -> Self {
         Self {
             expected_auth_token: expected_auth_token.map(ToOwned::to_owned),
-            expected_team_uid: expected_team_uid.map(ToOwned::to_owned),
+            expected_team_uid: Some(expected_team_uid.to_string()),
             send_count,
             result: FakeGraphqlResult::Success,
         }
@@ -262,6 +225,27 @@ fn refresh_disabled_sends_provided_bearer_token() {
     .unwrap();
 
     assert!(!base_client.is_auth_refresh_allowed());
+    assert_eq!(send_count.load(Ordering::SeqCst), 1);
+    assert_no_events(&event_receiver);
+}
+
+#[test]
+fn team_scoped_request_sends_configured_options_and_team_header() {
+    let (base_client, event_receiver) = externally_authenticated_base_client("daemon-token");
+    let send_count = Arc::new(AtomicUsize::new(0));
+
+    block_on(send_team_scoped_graphql_request(
+        &base_client,
+        FakeGraphqlOperation::successful_for_team(
+            Some("daemon-token"),
+            "team-uid",
+            send_count.clone(),
+        ),
+        None,
+        "team-uid".to_string(),
+    ))
+    .unwrap();
+
     assert_eq!(send_count.load(Ordering::SeqCst), 1);
     assert_no_events(&event_receiver);
 }
