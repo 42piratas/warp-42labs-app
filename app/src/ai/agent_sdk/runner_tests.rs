@@ -3,18 +3,23 @@ use std::sync::Arc;
 use chrono::Utc;
 use warp_cli::agent::OutputFormat;
 use warp_cli::runner::UpdateRunnerArgs;
-use warp_cli::scope::TeamSelection;
+use warp_cli::scope::{ObjectScope, TeamSelection};
 use warp_graphql::object::{Space, SpaceType};
 use warp_graphql::queries::get_runners::{Runner, RunnerConfig, RunnerOs};
+use warpui::App;
 
 use super::{
     RunnerArch, RunnerArchArg, RunnerOsArg, confirm_delete, execute_update, merge_instance_shape,
-    resolve_arch, resolve_updated_name,
+    resolve_arch, resolve_create_request_scope, resolve_updated_name,
 };
 use crate::server::ids::ServerId;
 use crate::server::server_api::factory::{MockFactoryClient, UpsertedRunner};
+use crate::server::server_api::team::MockTeamClient;
+use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::server::team_scope::RequestTeamScope;
-use crate::workspaces::user_workspaces::TeamContextForOperation;
+use crate::workspaces::team::{Team, TeamVisibility};
+use crate::workspaces::user_workspaces::{TeamContextForOperation, UserWorkspaces};
+use crate::workspaces::workspace::{Workspace, WorkspaceUid};
 
 fn runner(uid: &str, name: &str) -> Runner {
     Runner {
@@ -59,6 +64,53 @@ fn request_team_scope() -> RequestTeamScope {
     RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(
         ServerId::from_string_lossy("team_uid00000000000123"),
     ))
+}
+
+#[test]
+fn personal_create_uses_teamless_request_scope_for_sole_team_user() {
+    App::test((), |app| async move {
+        let team = Team {
+            uid: ServerId::from(7),
+            name: "Sole team".to_string(),
+            color: None,
+            invite_link: None,
+            members: vec![],
+            pending_email_invites: vec![],
+            invite_link_domain_restrictions: vec![],
+            billing_metadata: Default::default(),
+            stripe_customer_id: None,
+            settings: Default::default(),
+            feature_model_choice: Default::default(),
+            is_eligible_for_discovery: false,
+            has_billing_history: false,
+            visibility: TeamVisibility::Open,
+        };
+        let mut workspace = Workspace::from_local_cache(
+            WorkspaceUid::from(ServerId::from(1)),
+            "Workspace".to_string(),
+            None,
+            None,
+        );
+        workspace.teams = vec![team];
+        app.add_singleton_model(|ctx| {
+            UserWorkspaces::mock(
+                Arc::new(MockTeamClient::new()),
+                Arc::new(MockWorkspaceClient::new()),
+                vec![workspace],
+                ctx,
+            )
+        });
+        let scope = ObjectScope {
+            team_selection: TeamSelection { team: None },
+            personal: true,
+        };
+
+        let request_scope = app
+            .read(|ctx| resolve_create_request_scope(&scope, ctx))
+            .unwrap();
+
+        assert_eq!(request_scope.team_uid(), None);
+    });
 }
 
 #[tokio::test]

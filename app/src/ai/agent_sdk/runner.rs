@@ -10,6 +10,7 @@ use warp_cli::runner::{
     CreateRunnerArgs, DeleteRunnerArgs, ListRunnersArgs, RunnerArchArg, RunnerCommand,
     RunnerMacosVersionArg, RunnerOsArg, RunnerSortByArg, UpdateRunnerArgs, validate_os_config,
 };
+use warp_cli::scope::ObjectScope;
 use warp_graphql::mutations::upsert_runner::{
     LinuxConfigInput, MacOsConfigInput, RunnerInput, RunnerInstanceShapeInput, UpsertRunnerInput,
 };
@@ -133,14 +134,13 @@ impl RunnerCommandRunner {
                     return;
                 }
             };
-            let team_scope =
-                match super::common::resolve_team_scope(&args.scope.team_selection, ctx) {
-                    Ok(team_scope) => RequestTeamScope::from_scope(&team_scope),
-                    Err(error) => {
-                        super::report_fatal_error(error, ctx);
-                        return;
-                    }
-                };
+            let team_scope = match resolve_create_request_scope(&args.scope, ctx) {
+                Ok(team_scope) => team_scope,
+                Err(error) => {
+                    super::report_fatal_error(error, ctx);
+                    return;
+                }
+            };
 
             let factory = ServerApiProvider::as_ref(ctx).get_factory_client();
             let input = build_create_input(args, owner.into());
@@ -229,6 +229,11 @@ impl warpui::Entity for RunnerCommandRunner {
     type Event = ();
 }
 impl SingletonEntity for RunnerCommandRunner {}
+
+fn resolve_create_request_scope(scope: &ObjectScope, ctx: &AppContext) -> Result<RequestTeamScope> {
+    let team_scope = super::common::resolve_object_scope(scope, ctx)?;
+    Ok(RequestTeamScope::from_scope(&team_scope))
+}
 
 async fn execute_update(
     factory: Arc<dyn FactoryClient>,
