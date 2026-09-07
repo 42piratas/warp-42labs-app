@@ -149,7 +149,7 @@ fn describe_team_resolution_error(error: TeamScopeForCliError, ctx: &AppContext)
     }
 }
 
-/// The team a CLI command acts within.
+/// The team a CLI command's policy reads are scoped to.
 pub(super) fn resolve_team_scope(
     team_selection: &TeamSelection,
     ctx: &AppContext,
@@ -158,36 +158,35 @@ pub(super) fn resolve_team_scope(
         .team_scope_for_cli(team_selection)
         .map_err(|err| describe_team_resolution_error(err, ctx))
 }
-pub(super) fn resolve_environment_team_scope(
-    scope: &ObjectScope,
+
+pub(super) fn resolve_object_scope(
+    object_scope: &ObjectScope,
     ctx: &AppContext,
 ) -> anyhow::Result<TeamScopeForCli> {
-    if scope.personal {
-        Ok(TeamScopeForCli::personal())
-    } else {
-        resolve_team_scope(&scope.team_selection, ctx)
-    }
+    UserWorkspaces::as_ref(ctx)
+        .team_scope_for_cli_object(object_scope)
+        .map_err(|err| describe_team_resolution_error(err, ctx))
 }
 
-/// [`validate_agent_mode_base_model_id`], also rejecting a model `scope`'s team does not let this
-/// member use.
-///
-/// The team is resolved only once the model turns out to be one of the member's own custom
-/// endpoints, since that is the only kind a team withholds. Resolving it eagerly would make a
-/// multi-team user pass `--team` to name a model no team governs.
-pub fn validate_agent_mode_base_model_id_for_scope(
+pub(super) fn validate_agent_mode_base_model_id_for_scope(
     model_id: &str,
-    team_selection: &TeamSelection,
+    team_scope: &impl TeamScope,
     ctx: &AppContext,
 ) -> anyhow::Result<LLMId> {
-    let llm_id = validate_agent_mode_base_model_id(model_id, ctx)?;
-    let prefs = LLMPreferences::as_ref(ctx);
-    let Some(llm) = prefs.custom_llm_info_for_id(&llm_id) else {
+    let llm_prefs = LLMPreferences::as_ref(ctx);
+    let valid_ids = llm_prefs
+        .get_base_llm_choices_for_agent_mode(team_scope, ctx)
+        .map(|info| info.id.clone())
+        .collect::<Vec<_>>();
+    let llm_id = classify_agent_mode_base_model_id(
+        model_id,
+        &valid_ids,
+        llm_prefs.agent_mode_models_unavailable(team_scope),
+    )?;
+    let Some(llm) = llm_prefs.custom_llm_info_for_id(&llm_id) else {
         return Ok(llm_id);
     };
-
-    let team_scope = resolve_team_scope(team_selection, ctx)?;
-    if is_model_allowed_for_scope(prefs, llm, &team_scope, ctx) {
+    if is_model_allowed_for_scope(llm_prefs, llm, team_scope, ctx) {
         return Ok(llm_id);
     }
     let scope = team_scope.team_uid().map_or_else(
@@ -232,6 +231,17 @@ pub(super) fn environment_is_visible_to_scope(
     match environment.permissions().owner {
         Owner::User { .. } => true,
         Owner::Team { team_uid } => team_scope.team_uid() == Some(team_uid),
+    }
+}
+pub(super) fn resolve_owner_for_team_scope(
+    team_scope: &impl TeamScope,
+    ctx: &AppContext,
+) -> anyhow::Result<Owner> {
+    match team_scope.team_uid() {
+        Some(team_uid) => Ok(Owner::Team { team_uid }),
+        None => Ok(Owner::User {
+            user_uid: current_user_uid(ctx)?,
+        }),
     }
 }
 

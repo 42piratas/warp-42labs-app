@@ -46,9 +46,10 @@ use crate::server::server_api::ai::{
     ListAgentMessagesRequest, ReadAgentMessageResponse, RunSortBy, RunSortOrder,
     SendAgentMessageRequest, SendAgentMessageResponse, SpawnAgentRequest, TaskListFilter,
 };
+use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::shared_session;
 use crate::util::time_format::format_approx_duration_from_now_utc;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{TeamScopeForCli, UserWorkspaces};
 
 const MAX_LINE_WIDTH: usize = 90;
 const STREAM_RETRY_BACKOFF_STEPS: &[u64] = &[1, 2, 5, 10];
@@ -386,7 +387,7 @@ impl AmbientAgentRunner {
                 vec![]
             };
 
-            let team_scope = match super::common::resolve_environment_team_scope(&args.scope, ctx) {
+            let team_scope = match super::common::resolve_object_scope(&args.scope, ctx) {
                 Ok(team_scope) => team_scope,
                 Err(err) => {
                     super::report_fatal_error(err, ctx);
@@ -403,15 +404,12 @@ impl AmbientAgentRunner {
                     environment_args.environment = Some(environment_id);
                 }
 
-            let environment_id = match EnvironmentChoice::resolve_for_create(
-                environment_args,
-                &team_scope,
-                ctx,
-            ) {
+            let environment_id =
+                match EnvironmentChoice::resolve_for_create(environment_args, &team_scope, ctx) {
                 Ok(EnvironmentChoice::None) => {
                     eprintln!("Agent will run without an environment.");
                     None
-                },
+                }
                 Ok(EnvironmentChoice::Environment { id, .. }) => Some(id),
                 Err(ResolveConfigurationError::Canceled) => {
                     ctx.terminate_app(TerminationMode::ForceTerminate, None);
@@ -494,7 +492,7 @@ impl AmbientAgentRunner {
                     .map(|model_id| {
                         super::common::validate_agent_mode_base_model_id_for_scope(
                             model_id,
-                            &args.scope.team_selection,
+                            &team_scope,
                             ctx,
                         )
                     })
@@ -537,11 +535,10 @@ impl AmbientAgentRunner {
                 mode,
                 config,
                 title: args.title,
-                team: match (args.scope.is_team(), args.scope.personal) {
-                    (true, _) => Some(true),
-                    (_, true) => Some(false),
-                    _ => None,
-                },
+                team: Some(match &team_scope {
+                    TeamScopeForCli::Personal => false,
+                    TeamScopeForCli::Team(_) => true,
+                }),
                 agent_identity_uid: args.agent_uid,
                 skill,
                 attachments,
@@ -558,8 +555,14 @@ impl AmbientAgentRunner {
             let should_open = args.open;
             let oz_root_url = ChannelState::oz_root_url();
             let ai_client_clone = ai_client.clone();
+            let request_team_scope = RequestTeamScope::from_scope(&team_scope);
             let spawn_future = async move {
-                let mut stream = Box::pin(spawn_task(request, ai_client_clone, Some(TASK_STATUS_POLLING_DURATION)));
+                let mut stream = Box::pin(spawn_task(
+                    request,
+                    request_team_scope,
+                    ai_client_clone,
+                    Some(TASK_STATUS_POLLING_DURATION),
+                ));
                 let mut session_join_info = None;
                 let mut spawned_task_id = None;
 

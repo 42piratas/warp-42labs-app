@@ -195,7 +195,7 @@ impl ServerApi {
         let operation = GetUpdatedCloudObjects::build(variables);
         let response_data = match team_scope {
             Some(team_scope) => {
-                self.send_graphql_request_with_team_scope(operation, None, team_scope)
+                self.send_graphql_request_for_team(operation, team_scope)
                     .await?
             }
             None => self.send_graphql_request(operation, None).await?,
