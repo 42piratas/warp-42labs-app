@@ -159,13 +159,15 @@ pub(super) fn resolve_team_scope(
         .map_err(|err| describe_team_resolution_error(err, ctx))
 }
 
-pub(super) fn resolve_object_scope(
-    object_scope: &ObjectScope,
+pub(super) fn resolve_environment_team_scope(
+    scope: &ObjectScope,
     ctx: &AppContext,
 ) -> anyhow::Result<TeamScopeForCli> {
-    UserWorkspaces::as_ref(ctx)
-        .team_scope_for_cli_object(object_scope)
-        .map_err(|err| describe_team_resolution_error(err, ctx))
+    if scope.personal {
+        Ok(TeamScopeForCli::Personal)
+    } else {
+        resolve_team_scope(&scope.team_selection, ctx)
+    }
 }
 
 pub(super) fn validate_agent_mode_base_model_id_for_scope(

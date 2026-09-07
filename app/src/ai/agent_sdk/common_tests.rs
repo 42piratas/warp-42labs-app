@@ -7,7 +7,7 @@ use warpui::App;
 
 use super::{
     EnvironmentChoice, classify_agent_mode_base_model_id, environment_is_visible_to_scope,
-    parse_ambient_task_id, resolve_object_scope, validate_agent_mode_base_model_id,
+    parse_ambient_task_id, resolve_environment_team_scope, validate_agent_mode_base_model_id,
     validate_agent_mode_base_model_id_for_scope,
 };
 use crate::LaunchMode;
@@ -120,7 +120,7 @@ fn multi_team_personal_scope_includes_only_personal_environments() {
             );
         });
         let implicit_scope = app.read(|ctx| {
-            resolve_object_scope(
+            resolve_environment_team_scope(
                 &ObjectScope {
                     team_selection: TeamSelection { team: None },
                     personal: false,
@@ -130,7 +130,7 @@ fn multi_team_personal_scope_includes_only_personal_environments() {
         });
         let personal_scope = app
             .read(|ctx| {
-                resolve_object_scope(
+                resolve_environment_team_scope(
                     &ObjectScope {
                         team_selection: TeamSelection { team: None },
                         personal: true,
