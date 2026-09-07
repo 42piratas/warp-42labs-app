@@ -488,10 +488,18 @@ fn test_reload_file_paths_skips_oversized_replacement() {
 
         let small_id = files.update(&mut app, |model, ctx| model.open(&small_path, true, ctx));
         await_load(&receiver).await;
-        files.update(&mut app, |model, ctx| {
+        let oversized_id = files.update(&mut app, |model, ctx| {
             model.open(&oversized_path, true, ctx)
         });
         await_load(&receiver).await;
+        let (stored_small_path, stored_oversized_path) = files.read(&app, |model, _| {
+            (
+                model.file_path(small_id).expect("stored small path"),
+                model
+                    .file_path(oversized_id)
+                    .expect("stored oversized path"),
+            )
+        });
 
         std::fs::write(&small_path, "updated").expect("update small file");
         let file = std::fs::File::create(&oversized_path).expect("replace oversized file");
@@ -500,7 +508,7 @@ fn test_reload_file_paths_skips_oversized_replacement() {
 
         files.update(&mut app, |model, ctx| {
             model.reload_file_paths(
-                HashSet::from([small_path.clone(), oversized_path.clone()]),
+                HashSet::from([stored_small_path.clone(), stored_oversized_path.clone()]),
                 ctx,
             );
         });
