@@ -124,13 +124,8 @@ impl ServerApi {
         });
         let response = match team_scope {
             Some(team_scope) => {
-                warp_server_client::graphql_helpers::send_team_scoped_graphql_request(
-                    &self.base_client,
-                    operation,
-                    None,
-                    team_scope.team_uid().map(|team_uid| team_uid.uid()),
-                )
-                .await?
+                self.send_graphql_request_for_team(operation, team_scope)
+                    .await?
             }
             None => self.send_graphql_request(operation, None).await?,
         };
@@ -156,13 +151,8 @@ impl ServerApi {
         });
         let response = match team_scope {
             Some(team_scope) => {
-                warp_server_client::graphql_helpers::send_team_scoped_graphql_request(
-                    &self.base_client,
-                    operation,
-                    None,
-                    team_scope.team_uid().map(|team_uid| team_uid.uid()),
-                )
-                .await?
+                self.send_graphql_request_for_team(operation, team_scope)
+                    .await?
             }
             None => self.send_graphql_request(operation, None).await?,
         };
