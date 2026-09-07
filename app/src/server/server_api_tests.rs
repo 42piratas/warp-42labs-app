@@ -2,7 +2,6 @@ use futures::executor::block_on;
 use mockito::Server;
 
 use super::*;
-use crate::server::ids::ServerId;
 use crate::server::retry_strategies::is_transient_http_error;
 use crate::workspaces::user_workspaces::{TeamContextForOperation, TeamlessScopeForTest};
 
@@ -112,22 +111,16 @@ fn out_of_credits_429_wraps_quota_limit_and_stays_transient() {
 }
 
 #[test]
-fn request_team_scope_sets_only_the_resolved_team_header() {
-    let mut team_options = warp_graphql::client::RequestOptions::default();
-    let team_uid = ServerId::from(42);
-    let expected_team_uid = team_uid.to_string();
+fn team_uid_header_value_includes_only_resolved_team_scope() {
+    let team_uid = 7.into();
     let team_scope = RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(team_uid));
-    apply_request_team_scope(&mut team_options, team_scope);
-    assert_eq!(
-        team_options
-            .headers
-            .get(TEAM_UID_HEADER)
-            .map(String::as_str),
-        Some(expected_team_uid.as_str())
-    );
 
-    let mut personal_options = warp_graphql::client::RequestOptions::default();
-    let personal_scope = RequestTeamScope::from_scope(&TeamlessScopeForTest);
-    apply_request_team_scope(&mut personal_options, personal_scope);
-    assert!(!personal_options.headers.contains_key(TEAM_UID_HEADER));
+    assert_eq!(
+        ServerApi::team_uid_header_value(team_scope),
+        Some(team_uid.uid().to_string())
+    );
+    assert_eq!(
+        ServerApi::team_uid_header_value(RequestTeamScope::from_scope(&TeamlessScopeForTest)),
+        None
+    );
 }

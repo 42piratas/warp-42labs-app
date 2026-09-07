@@ -1,9 +1,9 @@
 use warp::tui_export::{
     AIConversationId, AmbientAgentTaskId, BlocklistAIHistoryModel, CloudAgentStartupBlocker,
     CloudAgentStartupFailure, CloudAgentStartupIssue, ConversationStatus, Harness,
-    OrchestrationEventStreamerEvent, RenderableAIError, StartAgentExecutionMode,
-    StartAgentExecutor, StartAgentExecutorEvent, StartAgentOutcome, StartAgentRequest,
-    register_tui_session_view_test_singletons,
+    OrchestrationEventStreamerEvent, RenderableAIError, RequestTeamScope, ResolvedTeamScope,
+    StartAgentExecutionMode, StartAgentExecutor, StartAgentExecutorEvent, StartAgentOutcome,
+    StartAgentRequest, UserWorkspaces, register_tui_session_view_test_singletons,
 };
 use warp_core::features::FeatureFlag;
 use warpui::platform::WindowStyle;
@@ -45,6 +45,9 @@ fn remote_request(parent_conversation_id: AIConversationId) -> StartAgentRequest
         lifecycle_subscription: None,
         parent_conversation_id,
         parent_run_id: Some("parent-run-1".to_string()),
+        request_team_scope: RequestTeamScope::from_scope(
+            &UserWorkspaces::teamless_context_for_operation_for_test(),
+        ),
     }
 }
 
@@ -180,10 +183,12 @@ fn add_relayed_executor(
         ctx.subscribe_to_model(&executor, move |_, event, ctx| {
             orchestration.update(ctx, |orchestration, ctx| match event {
                 StartAgentExecutorEvent::CreateAgent(request) => {
+                    let team_context = UserWorkspaces::teamless_context_for_operation_for_test();
                     orchestration.dispatch_create_agent(
                         parent_session_id,
                         (**request).clone(),
                         None,
+                        &team_context,
                         ctx,
                     );
                 }
@@ -219,6 +224,9 @@ fn dispatch_and_recv(
             None,
             parent_conversation_id,
             Some("parent-run-1".to_string()),
+            RequestTeamScope::from_scope(
+                &UserWorkspaces::teamless_context_for_operation_for_test(),
+            ),
             ctx,
         )
     });
@@ -303,8 +311,14 @@ fn local_oz_child_session_indexes_run_id_immediately() {
             lifecycle_subscription: None,
             parent_conversation_id,
             parent_run_id: Some("parent-run-1".to_string()),
+            request_team_scope: RequestTeamScope::from_scope(
+                &UserWorkspaces::teamless_context_for_operation_for_test(),
+            ),
         };
         app.update(|ctx| {
+            let team_scope = ResolvedTeamScope::from_scope(
+                &UserWorkspaces::teamless_context_for_operation_for_test(),
+            );
             TuiOrchestrationModel::handle(ctx).update(ctx, |orchestration, ctx| {
                 orchestration.register_local_oz_child_session(
                     MaterializedLocalOzChildSession {
@@ -316,6 +330,7 @@ fn local_oz_child_session_indexes_run_id_immediately() {
                         task_id,
                         conversation_name: "verify-child".to_string(),
                     },
+                    &team_scope,
                     ctx,
                 );
             });

@@ -175,6 +175,7 @@ impl RunAgentsExecutor {
         action_id: AIAgentActionId,
         request: RunAgentsRequest,
         parent_conversation_id: AIConversationId,
+        team_scope: RequestTeamScope,
         ctx: &mut ModelContext<Self>,
     ) -> async_channel::Receiver<RunAgentsResult> {
         let (sender, receiver) = async_channel::bounded(1);
@@ -219,6 +220,7 @@ impl RunAgentsExecutor {
                     action_id_for_wait.clone(),
                     request,
                     parent_conversation_id,
+                    team_scope,
                     sender,
                     ctx,
                 )
@@ -233,6 +235,7 @@ impl RunAgentsExecutor {
         action_id: AIAgentActionId,
         request: RunAgentsRequest,
         parent_conversation_id: AIConversationId,
+        team_scope: RequestTeamScope,
         sender: async_channel::Sender<RunAgentsResult>,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -286,6 +289,7 @@ impl RunAgentsExecutor {
                     None, /* lifecycle_subscription */
                     parent_conversation_id,
                     parent_run_id.clone(),
+                    team_scope,
                     exec_ctx,
                 )
             });
@@ -418,8 +422,13 @@ impl RunAgentsExecutor {
         }
         let telemetry_request = request.clone();
 
-        let receiver =
-            self.dispatch_prepared_run_agents(action_id, request, parent_conversation_id, ctx);
+        let receiver = self.dispatch_prepared_run_agents(
+            action_id,
+            request,
+            parent_conversation_id,
+            team_scope,
+            ctx,
+        );
 
         ActionExecution::new_async(async move { receiver.recv().await }, move |result, ctx| {
             let result = match result {

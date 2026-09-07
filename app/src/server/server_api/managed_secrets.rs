@@ -58,7 +58,7 @@ impl<'a> ManagedSecretsTransport<'a> {
         match self.team_scope {
             Some(team_scope) => {
                 self.api
-                    .send_graphql_request_for_team(operation, team_scope, None)
+                    .send_graphql_request_for_team(operation, team_scope)
                     .await
             }
             None => self.api.send_graphql_request(operation, None).await,
