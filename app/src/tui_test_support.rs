@@ -6,6 +6,7 @@ use std::sync::Arc;
 use ai::api_keys::ApiKeyManager;
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
 use chrono::{Duration, Local};
+use warp_cli::agent::Harness;
 use warp_core::SessionId;
 use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
 use warpui::{AppContext, ModelContext, ModelHandle, SingletonEntity as _};
@@ -23,12 +24,13 @@ use crate::ai::blocklist::{
     BlocklistAIActionModel, BlocklistAIHistoryModel, BlocklistAIPermissions, PersistedAIInput,
     PersistedAIInputType, QueuedQueryModel,
 };
-use crate::ai::cloud_agent_settings::CloudAgentSettings;
+use crate::ai::cloud_agent_settings::{AuthSecretPreference, CloudAgentSettings};
 use crate::ai::cloud_environments::CloudEnvironmentCatalog;
 use crate::ai::connected_self_hosted_workers::ConnectedSelfHostedWorkersModel;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::llms::{LLMId, LLMPreferences};
+use crate::ai::managed_secrets::ManagedSecretsFacade;
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerManager;
 use crate::ai::request_usage_model::AIRequestUsageModel;
 use crate::auth::AuthStateProvider;
@@ -41,6 +43,7 @@ use crate::server::experiments::ServerExperiments;
 use crate::server::ids::ServerId;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::sync_queue::SyncQueue;
+use crate::server::team_scope::RequestTeamScope;
 #[cfg(feature = "voice_input")]
 use crate::server::voice_transcriber::ServerVoiceTranscriber;
 use crate::settings::manager::SettingsManager;
@@ -309,6 +312,22 @@ pub fn set_tui_workspace_teams_for_test(teams: Vec<(ServerId, String)>, ctx: &mu
         workspaces.set_current_workspace_uid(workspace_uid, ctx);
     });
 }
+pub fn set_tui_auth_secret_preference_for_test(
+    team_scope: RequestTeamScope,
+    harness: Harness,
+    secret_name: String,
+    ctx: &mut AppContext,
+) {
+    CloudAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
+        settings.persist_auth_secret_preference(
+            team_scope,
+            harness,
+            Some(AuthSecretPreference::Named(secret_name)),
+            ctx,
+        );
+    });
+}
+
 /// Queues an action as the active confirmation request for a TUI view test.
 pub fn queue_tui_permission_action(
     action_model: &mut BlocklistAIActionModel,
@@ -340,6 +359,7 @@ pub fn register_tui_session_view_test_singletons(app: &mut warpui::App) {
     app.add_singleton_model(|_| ServerApiProvider::new_for_test());
     app.add_singleton_model(|_| AuthStateProvider::new_for_test());
     app.add_singleton_model(AuthManager::new_for_test);
+    app.add_singleton_model(ManagedSecretsFacade::new_for_test);
     app.add_singleton_model(|_| TuiOnboardingMarkers::new_ready_for_test(false, false));
     app.add_singleton_model(PrivacySettings::mock);
     app.add_singleton_model(|ctx| {

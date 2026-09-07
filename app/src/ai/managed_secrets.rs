@@ -24,6 +24,14 @@ impl ManagedSecretsFacade {
         }
     }
 
+    #[cfg(any(test, all(feature = "tui", feature = "test-util")))]
+    pub fn new_for_test(ctx: &mut warpui::ModelContext<Self>) -> Self {
+        Self::new(
+            crate::server::server_api::ServerApiProvider::as_ref(ctx).get(),
+            crate::auth::AuthStateProvider::as_ref(ctx).get().clone(),
+        )
+    }
+
     fn manager_for_scope(&self, team_scope: RequestTeamScope) -> ManagedSecretManager {
         ManagedSecretManager::new(
             self.client_for_scope(team_scope),
@@ -63,6 +71,7 @@ impl ManagedSecretsFacade {
             .delete_secret(owner, name)
     }
 
+    #[cfg(not(target_family = "wasm"))]
     pub fn update_secret(
         &self,
         team_scope: RequestTeamScope,
@@ -75,6 +84,7 @@ impl ManagedSecretsFacade {
             .update_secret(owner, name, value, description)
     }
 
+    #[cfg(not(target_family = "wasm"))]
     pub fn list_secrets(
         &self,
         team_scope: RequestTeamScope,
