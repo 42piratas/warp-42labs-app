@@ -71,10 +71,14 @@ use crate::terminal::cli_agent_sessions::{
     CLIAgentInputEntrypoint, CLIAgentInputState, CLIAgentRichInputCloseReason, CLIAgentSession,
     CLIAgentSessionContext, CLIAgentSessionStatus, CLIAgentSessionsModel,
 };
-use crate::terminal::model::ansi::{self, BootstrappedValue, InitShellValue, PreexecValue};
+use crate::terminal::model::ansi::{
+    self, BootstrappedValue, CommandFinishedValue, InitShellValue, PrecmdValue, PreexecValue,
+    PromptMetadata,
+};
 use crate::terminal::model::block::AgentViewVisibility;
 use crate::terminal::model::blocks::{TotalIndex, insert_block};
 use crate::terminal::model::grid::Dimensions as _;
+use crate::terminal::model::lifecycle::StartCommandOutcome;
 use crate::terminal::model::terminal_model::WithinBlock;
 use crate::terminal::session_settings::AgentToolbarChipSelection;
 use crate::terminal::shared_session::shared_handlers::{
@@ -1927,21 +1931,89 @@ fn test_create_new_block_with_local_status() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let terminal = add_window_with_terminal(&mut app, None);
+        let (sessions, model_events) = terminal.read(&app, |view, _| {
+            (view.sessions.clone(), view.model_events_handle.clone())
+        });
+        let completion_receivers = |app: &mut App, session_id: SessionId| {
+            let (bootstrap_tx, bootstrap_rx) = async_channel::bounded(1);
+            let (prompt_tx, prompt_rx) = async_channel::bounded(1);
+            app.update(|ctx| {
+                ctx.subscribe_to_model(&sessions, move |_, event, _| {
+                    if matches!(
+                        event,
+                        SessionsEvent::SessionBootstrapped(event)
+                            if event.session_id == session_id
+                    ) {
+                        let _ = bootstrap_tx.try_send(());
+                    }
+                });
+                ctx.subscribe_to_model(&model_events, move |dispatcher, event, ctx| {
+                    if matches!(event, ModelEvent::Handler(AnsiHandlerEvent::Precmd))
+                        && dispatcher.as_ref(ctx).active_session_id() == Some(session_id)
+                    {
+                        let _ = prompt_tx.try_send(());
+                    }
+                });
+            });
+            (bootstrap_rx, prompt_rx)
+        };
+
+        let local_session_id = SessionId::from(0);
+        let (local_bootstrap_rx, local_prompt_rx) =
+            completion_receivers(&mut app, local_session_id);
+        let local_hostname = crate::terminal::model::session::get_local_hostname()
+            .unwrap_or_else(|_| "localhost".to_string());
 
         // Set up a terminal with a local session
         terminal.update(&mut app, |view, _ctx| {
             let mut model = view.model.lock();
 
             // Initialize a local session
+            model.register_session_id(local_session_id);
             model.init_shell(InitShellValue {
-                session_id: 0.into(),
+                session_id: local_session_id,
                 shell: "bash".to_owned(),
+                hostname: local_hostname.clone(),
                 ..Default::default()
             });
             model.bootstrapped(BootstrappedValue {
+                session_id: Some(local_session_id.as_u64()),
                 shell: "bash".to_owned(),
                 ..Default::default()
             });
+            let completion_metadata = ansi::CompletionMetadata::default();
+            model.command_finished(CommandFinishedValue {
+                completion_metadata: completion_metadata.clone(),
+                session_id: Some(local_session_id.as_u64()),
+            });
+            model.precmd_with_completion_metadata(PrecmdValue {
+                completion_metadata,
+                prompt_metadata: PromptMetadata {
+                    session_id: Some(local_session_id.as_u64()),
+                    ..Default::default()
+                },
+            });
+        });
+        local_bootstrap_rx
+            .recv()
+            .await
+            .expect("local session should finish bootstrapping");
+        local_prompt_rx
+            .recv()
+            .await
+            .expect("local prompt should be dispatched");
+
+        terminal.read(&app, |view, ctx| {
+            let session = view
+                .sessions
+                .as_ref(ctx)
+                .get(local_session_id)
+                .expect("local session should be registered");
+            assert_eq!(session.session_type(), SessionType::Local);
+            assert_eq!(
+                view.model_events_handle.as_ref(ctx).active_session_id(),
+                Some(local_session_id)
+            );
         });
 
         assert_eventually!(
@@ -1964,24 +2036,110 @@ fn test_create_new_block_with_local_status() {
         );
 
         // Now test with a remote session
+        let remote_session_id = SessionId::from(1);
+        let (remote_bootstrap_rx, remote_prompt_rx) =
+            completion_receivers(&mut app, remote_session_id);
+        let remote_hostname = format!("{local_hostname}.remote.invalid");
         terminal.update(&mut app, |view, _ctx| {
             let mut model = view.model.lock();
 
             // Create a new block with a remote session ID and remote_shell
+            model.register_session_id(remote_session_id);
             model.init_shell(InitShellValue {
-                session_id: 1.into(),
+                session_id: remote_session_id,
                 shell: "bash".to_owned(),
                 user: "user".to_owned(),
-                hostname: "remote".to_owned(),
+                hostname: remote_hostname,
                 ..Default::default()
             });
             model.bootstrapped(BootstrappedValue {
+                session_id: Some(remote_session_id.as_u64()),
                 shell: "bash".to_owned(),
                 ..Default::default()
             });
+            let completion_metadata = ansi::CompletionMetadata::default();
+            model.command_finished(CommandFinishedValue {
+                completion_metadata: completion_metadata.clone(),
+                session_id: Some(remote_session_id.as_u64()),
+            });
+            model.precmd_with_completion_metadata(PrecmdValue {
+                completion_metadata,
+                prompt_metadata: PromptMetadata {
+                    session_id: Some(remote_session_id.as_u64()),
+                    ..Default::default()
+                },
+            });
+        });
+        remote_bootstrap_rx
+            .recv()
+            .await
+            .expect("remote session should finish bootstrapping");
+        remote_prompt_rx
+            .recv()
+            .await
+            .expect("remote prompt should be dispatched");
 
-            // Create a block in the remote session
-            model.simulate_block("echo remote", "remote output");
+        terminal.read(&app, |view, ctx| {
+            let session = view
+                .sessions
+                .as_ref(ctx)
+                .get(remote_session_id)
+                .expect("remote session should be registered");
+            assert!(matches!(
+                session.session_type(),
+                SessionType::WarpifiedRemote { .. }
+            ));
+            assert_eq!(
+                view.model_events_handle.as_ref(ctx).active_session_id(),
+                Some(remote_session_id)
+            );
+        });
+
+        let (command_completion_tx, command_completion_rx) = async_channel::bounded(1);
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&model_events, move |dispatcher, event, ctx| {
+                if matches!(event, ModelEvent::Handler(AnsiHandlerEvent::Precmd))
+                    && dispatcher.as_ref(ctx).active_session_id() == Some(remote_session_id)
+                {
+                    let _ = command_completion_tx.try_send(());
+                }
+            });
+        });
+        terminal.update(&mut app, |view, _ctx| {
+            let mut model = view.model.lock();
+            assert_eq!(
+                model.start_command_execution(),
+                StartCommandOutcome::Accepted
+            );
+            model.process_bytes("echo remote");
+            model.preexec(PreexecValue {
+                command: "echo remote".to_owned(),
+                session_id: Some(remote_session_id.as_u64()),
+            });
+            model.process_bytes("remote output");
+            let completion_metadata = ansi::CompletionMetadata::default();
+            model.command_finished(CommandFinishedValue {
+                completion_metadata: completion_metadata.clone(),
+                session_id: Some(remote_session_id.as_u64()),
+            });
+            model.precmd_with_completion_metadata(PrecmdValue {
+                completion_metadata,
+                prompt_metadata: PromptMetadata {
+                    session_id: Some(remote_session_id.as_u64()),
+                    ..Default::default()
+                },
+            });
+        });
+        command_completion_rx
+            .recv()
+            .await
+            .expect("remote command completion should be dispatched");
+
+        terminal.read(&app, |view, ctx| {
+            assert_eq!(
+                view.model_events_handle.as_ref(ctx).active_session_id(),
+                Some(remote_session_id)
+            );
         });
 
         // Verify block is non-local (remote)
@@ -8085,7 +8243,7 @@ fn drag_drop_image_in_cli_agent_long_running_command_pastes_via_clipboard() {
             });
         });
 
-        terminal.update(&mut app, |view, ctx| {
+        let paste_future = terminal.update(&mut app, |view, ctx| {
             CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions, ctx| {
                 sessions.set_session(
                     view.view_id,
@@ -8120,8 +8278,13 @@ fn drag_drop_image_in_cli_agent_long_running_command_pastes_via_clipboard() {
                 );
             }
 
-            view.drag_and_drop_files(&[image_path_str], ctx);
+            let handle = view
+                .drag_and_drop_files(&[image_path_str], ctx)
+                .expect("CLI-agent image drop should spawn a paste task");
+            ctx.await_spawned_future(handle.future_id())
         });
+
+        paste_future.await;
 
         // The paste flow is async (off-thread file read, then hop back to
         // the view to write the clipboard + paste keystroke). Wait for the
@@ -8133,8 +8296,9 @@ fn drag_drop_image_in_cli_agent_long_running_command_pastes_via_clipboard() {
         } else {
             vec![0x16]
         };
-        assert_eventually!(
-            pty_writes.borrow().len() == 1 && pty_writes.borrow()[0] == expected_paste_bytes,
+        assert_eq!(
+            *pty_writes.borrow(),
+            vec![expected_paste_bytes.clone()],
             "expected single paste-keystroke PTY write {:?}; got {:?}",
             expected_paste_bytes,
             pty_writes.borrow()
