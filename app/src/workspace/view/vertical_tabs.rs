@@ -3340,12 +3340,12 @@ fn render_grouped_tab_container(
             container = container
                 .with_corner_radius(CornerRadius::with_all(Radius::Pixels(ROW_CORNER_RADIUS)));
         }
-        if group_outline_thickness > 0.
+        if group_outline_thickness > 0
             && let Some(color) = group_outline_color
         {
             container = container.with_foreground_border(
                 Border::all(f32::from(group_outline_thickness)).with_border_fill(ThemeFill::Solid(
-                    color.to_ansi_color(&theme.terminal_colors().normal),
+                    color.to_ansi_color(&theme.terminal_colors().normal).into(),
                 )),
             );
         }
