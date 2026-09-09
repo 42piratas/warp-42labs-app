@@ -31,7 +31,7 @@ use super::{
     summary_search_text_fragments, supports_cli_agent_sidebar_style, terminal_kind_badge_label,
     terminal_primary_line_data, terminal_pull_request_badge_label, terminal_search_text_fragments,
     terminal_title_fallback_font, uses_outer_group_container, visible_pane_ids_for_detail_target,
-    vtab_diff_stats_text,
+    vtab_diff_stats_text, resolve_group_outline_color,
 };
 use crate::ai::agent::conversation::ConversationStatus;
 use crate::context_chips::display_chip::GitLineChanges;
@@ -50,6 +50,29 @@ use crate::user_config::agent_tab_styles::{
     AgentTabBadgeSize, AgentTabColor, AgentTabStateStyle, AgentTabStyleLayer,
 };
 use crate::workspace::tab_settings::VerticalTabsDisplayGranularity;
+use crate::workspace::tab_group::{TabGroup, TabGroupId};
+use crate::tab::SelectedTabColor;
+use uuid::Uuid;
+
+#[test]
+fn group_outline_manual_precedence_and_uuid_selection() {
+    let colors = [AgentTabColor::Blue, AgentTabColor::Cyan];
+    let mut group = TabGroup::new();
+    group.id = TabGroupId(Uuid::from_u128(3));
+    assert_eq!(
+        resolve_group_outline_color(&group, &colors),
+        Some(AnsiColorIdentifier::Cyan)
+    );
+    group.color = SelectedTabColor::Color(AnsiColorIdentifier::Red);
+    assert_eq!(
+        resolve_group_outline_color(&group, &colors),
+        Some(AnsiColorIdentifier::Red)
+    );
+    group.color = SelectedTabColor::Cleared;
+    assert_eq!(resolve_group_outline_color(&group, &colors), None);
+    group.color = SelectedTabColor::Unset;
+    assert_eq!(resolve_group_outline_color(&group, &[]), None);
+}
 
 fn label(text: &str) -> VerticalTabsSummaryPrimaryLabel {
     VerticalTabsSummaryPrimaryLabel {

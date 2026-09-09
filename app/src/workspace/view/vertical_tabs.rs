@@ -8,24 +8,24 @@ use std::sync::{Arc, Mutex};
 use languages::language_by_local_filename;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{Vector2F, vec2f};
+use pathfinder_geometry::vector::{vec2f, Vector2F};
 use settings::Setting as _;
 use warp_core::context_flag::ContextFlag;
 use warp_core::telemetry::TelemetryEvent as _;
-use warp_core::ui::Icon as WarpIcon;
 use warp_core::ui::color::blend::Blend;
 use warp_core::ui::color::coloru_with_opacity;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::{AnsiColorIdentifier, Fill as WarpThemeFill, WarpTheme};
+use warp_core::ui::Icon as WarpIcon;
 use warpui::elements::{
-    Border, ChildAnchor, Clipped, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
-    Container, CornerRadius, CrossAxisAlignment, DispatchEventResult, DragAxis, DragBarSide,
-    Draggable, DropShadow, DropTarget, Element, Empty, EventHandler, Expanded, Fill as ElementFill,
-    Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, Padding,
-    ParentAnchor, ParentElement, ParentOffsetBounds, PositionedElementAnchor,
-    PositionedElementOffsetBounds, Radius, Resizable, ResizableStateHandle, SavePosition,
-    ScrollTarget, ScrollToPositionMode, ScrollbarWidth, Shrinkable, Stack, Text,
-    resizable_state_handle,
+    resizable_state_handle, Border, ChildAnchor, Clipped, ClippedScrollStateHandle,
+    ClippedScrollable, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
+    DispatchEventResult, DragAxis, DragBarSide, Draggable, DropShadow, DropTarget, Element, Empty,
+    EventHandler, Expanded, Fill as ElementFill, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
+    MouseStateHandle, OffsetPositioning, Padding, ParentAnchor, ParentElement, ParentOffsetBounds,
+    PositionedElementAnchor, PositionedElementOffsetBounds, Radius, Resizable,
+    ResizableStateHandle, SavePosition, ScrollTarget, ScrollToPositionMode, ScrollbarWidth,
+    Shrinkable, Stack, Text,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::platform::Cursor;
@@ -41,14 +41,14 @@ use crate::ai::agent_management::AgentNotificationsModel;
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
 use crate::ai::conversation_status_ui::render_status_element;
 use crate::appearance::Appearance;
-use crate::cloud_object::CloudObjectLookup as _;
 use crate::cloud_object::model::generic_string_model::StringModel;
+use crate::cloud_object::CloudObjectLookup as _;
 use crate::code::editor::{add_color, remove_color};
 use crate::code::icon_from_file_path;
 use crate::context_chips::display_chip::GitLineChanges;
 use crate::context_chips::github_pr_display_text_from_url;
-use crate::drive::DriveObjectType;
 use crate::drive::cloud_object_styling::warp_drive_icon_color;
+use crate::drive::DriveObjectType;
 use crate::editor::EditorView;
 use crate::pane_group::pane::IPaneType;
 use crate::pane_group::{
@@ -56,8 +56,8 @@ use crate::pane_group::{
 };
 use crate::safe_triangle::SafeTriangle;
 use crate::tab::{
-    SelectedTabColor, TAB_INDICATOR_SYNCED_COLOR, TabData, reveals_tab_shortcut_hints,
-    tab_activate_binding_name, tab_position_id,
+    reveals_tab_shortcut_hints, tab_activate_binding_name, tab_position_id, SelectedTabColor,
+    TabData, TAB_INDICATOR_SYNCED_COLOR,
 };
 use crate::terminal::cli_agent_sessions::listener::is_agent_supported;
 use crate::terminal::cli_agent_sessions::{CLIAgentDisplayState, CLIAgentSessionsModel};
@@ -68,13 +68,13 @@ use crate::themes::theme::Fill as ThemeFill;
 use crate::ui_components::agent_icon::terminal_view_agent_icon_variant;
 use crate::ui_components::buttons::combo_inner_button;
 use crate::ui_components::icon_with_status::{
-    BadgeInnerShape, IconWithStatusVariant, StatusBadgeMode, StatusBadgeStyle,
     render_element_with_status_badge_override, render_icon_with_status,
-    render_icon_with_status_with_badge_override,
+    render_icon_with_status_with_badge_override, BadgeInnerShape, IconWithStatusVariant,
+    StatusBadgeMode, StatusBadgeStyle,
 };
 use crate::ui_components::icons::Icon as UiIcon;
+use crate::user_config::agent_tab_styles::{AgentTabColor, AgentTabStateStyle, AgentTabStyleLayer};
 use crate::user_config::WarpConfig;
-use crate::user_config::agent_tab_styles::{AgentTabStateStyle, AgentTabStyleLayer};
 use crate::util::bindings::keybinding_name_to_display_string;
 use crate::util::color::Opacity;
 use crate::workspace::action::{NewSessionMenuAnchor, WorkspaceAction};
@@ -93,7 +93,7 @@ use crate::workspace::{
     PaneViewLocator, TabBarLocation, TabContextMenuAnchor, VerticalTabsPaneContextMenuTarget,
     VerticalTabsPaneDropTargetData, Workspace,
 };
-use crate::{FeatureFlag, send_telemetry_from_app_ctx};
+use crate::{send_telemetry_from_app_ctx, FeatureFlag};
 
 const PANEL_WIDTH: f32 = 248.;
 const MIN_PANEL_WIDTH: f32 = 200.;
@@ -257,6 +257,20 @@ fn aggregate_cli_styles(
     styles: impl IntoIterator<Item = ResolvedCLIAgentStyle>,
 ) -> Option<ResolvedCLIAgentStyle> {
     styles.into_iter().max_by_key(|style| style.state)
+}
+
+fn resolve_group_outline_color(
+    group: &TabGroup,
+    colors: &[AgentTabColor],
+) -> Option<AnsiColorIdentifier> {
+    match group.color {
+        SelectedTabColor::Color(color) => Some(color),
+        SelectedTabColor::Cleared => None,
+        SelectedTabColor::Unset => colors
+            .get((group.id.0.as_u128() % colors.len().max(1) as u128) as usize)
+            .copied()
+            .map(Into::into),
+    }
 }
 
 fn vtab_pane_row_position_id(pane_group_id: EntityId, pane_id: PaneId) -> String {
@@ -3155,6 +3169,11 @@ fn render_grouped_tab_container(
         .any(|(tab_index, _)| *tab_index == workspace.active_tab_index);
     let is_collapsed = group.collapsed;
     let first_member_index = members.first().map(|(index, _)| *index).unwrap_or(0);
+    let group_styles = WarpConfig::as_ref(app).agent_tab_styles();
+    let group_background_color = group_styles.group_background.map(AnsiColorIdentifier::from);
+    let group_outline_color =
+        resolve_group_outline_color(&group, &group_styles.group_outline.colors);
+    let group_outline_thickness = group_styles.group_outline.thickness;
 
     let resolved_mode = resolve_vertical_tabs_mode(app);
     let needs_outer_horizontal_padding = uses_outer_group_container(match resolved_mode {
@@ -3272,9 +3291,8 @@ fn render_grouped_tab_container(
         // a backdrop (member rows carry their own colors and layer on top), and
         // strengthen that tint on hover/active as the highlight. Fall back to the
         // neutral highlight when the group has no color.
-        let group_color_fill: Option<ThemeFill> = group
-            .color
-            .resolve(None)
+        let group_color_fill: Option<ThemeFill> = group_background_color
+            .or_else(|| group.color.resolve(None))
             .map(|c| c.to_ansi_color(&theme.terminal_colors().normal).into());
         let is_highlighted = hover_state.is_hovered() || any_member_active;
         let background = if let Some(color) = group_color_fill {
@@ -3321,6 +3339,15 @@ fn render_grouped_tab_container(
         } else {
             container = container
                 .with_corner_radius(CornerRadius::with_all(Radius::Pixels(ROW_CORNER_RADIUS)));
+        }
+        if group_outline_thickness > 0
+            && let Some(color) = group_outline_color
+        {
+            container = container.with_foreground_border(
+                Border::all(f32::from(group_outline_thickness)).with_border_fill(ThemeFill::Solid(
+                    color.to_ansi_color(&theme.terminal_colors().normal).into(),
+                )),
+            );
         }
         let container = container.finish();
         // Before-group indicator: above the header when an ungrouped pane is
