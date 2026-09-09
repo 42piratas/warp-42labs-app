@@ -209,6 +209,14 @@ fn pi_is_supported() {
 }
 
 #[test]
+fn repo_owned_adapters_are_supported_by_default_listener() {
+    assert!(is_agent_supported(&CLIAgent::Antigravity));
+    assert!(is_agent_supported(&CLIAgent::Hermes));
+    assert!(create_handler(&CLIAgent::Antigravity).is_some());
+    assert!(create_handler(&CLIAgent::Hermes).is_some());
+}
+
+#[test]
 fn oh_my_pi_is_supported() {
     assert!(is_agent_supported(&CLIAgent::OhMyPi));
 }

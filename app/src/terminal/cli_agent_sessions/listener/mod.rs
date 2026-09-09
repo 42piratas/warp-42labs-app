@@ -47,6 +47,8 @@ pub fn is_agent_supported(agent: &CLIAgent) -> bool {
             | CLIAgent::Droid
             | CLIAgent::Pi
             | CLIAgent::OhMyPi
+            | CLIAgent::Hermes
+            | CLIAgent::Antigravity
             | CLIAgent::Grok
             | CLIAgent::WarpTui
     )
@@ -69,17 +71,17 @@ fn create_handler(agent: &CLIAgent) -> Option<Box<dyn CLIAgentSessionHandler>> {
         | CLIAgent::Droid
         | CLIAgent::Pi
         | CLIAgent::OhMyPi
+        | CLIAgent::Hermes
+        | CLIAgent::Antigravity
         | CLIAgent::WarpTui => Some(Box::new(DefaultSessionListener)),
         CLIAgent::Codex | CLIAgent::Grok => {
             Some(Box::new(Osc9FallbackSessionHandler { agent: *agent }))
         }
-        CLIAgent::Hermes
-        | CLIAgent::Amp
+        CLIAgent::Amp
         | CLIAgent::Copilot
         | CLIAgent::CursorCli
         | CLIAgent::Goose
         | CLIAgent::Vibe
-        | CLIAgent::Antigravity
         | CLIAgent::Unknown => None,
     }
 }
@@ -106,11 +108,7 @@ struct Osc9FallbackSessionHandler {
 impl Osc9FallbackSessionHandler {
     fn parse_osc9_text(agent: CLIAgent, body: &str) -> Option<CLIAgentEvent> {
         let body = body.trim();
-        if body.is_empty() {
-            return None;
-        }
-
-        Some(CLIAgentEvent {
+        (!body.is_empty()).then(|| CLIAgentEvent {
             v: 1,
             agent,
             event: CLIAgentEventType::Stop,
@@ -134,16 +132,13 @@ impl CLIAgentSessionHandler for Osc9FallbackSessionHandler {
         plugin_already_active: bool,
     ) -> Option<CLIAgentEvent> {
         if let Some(event) = parse_event(title, body) {
-            if event.agent != self.agent {
-                return None;
-            }
-            if self.agent == CLIAgent::Codex && !FeatureFlag::CodexPlugin.is_enabled() {
+            if event.agent != self.agent
+                || (self.agent == CLIAgent::Codex && !FeatureFlag::CodexPlugin.is_enabled())
+            {
                 return None;
             }
             return Some(event);
         }
-        // OSC 9 notifications have no title. Skip OSC 9 once the rich plugin is
-        // active, otherwise we'd process both OSC 777 and OSC 9 notifications.
         if title.is_some() || plugin_already_active {
             return None;
         }

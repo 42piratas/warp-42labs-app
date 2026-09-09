@@ -1,0 +1,62 @@
+#!/usr/bin/env python3
+"""Install the repo-owned CLI-agent adapters without clobbering user config."""
+import argparse
+import datetime
+import json
+import os
+import shutil
+import subprocess
+import shlex
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1] / "resources" / "agent_state_adapters"
+
+
+def backup(path):
+    stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    target = path.with_name(path.name + ".bak." + stamp)
+    shutil.copy2(path, target)
+
+
+def antigravity():
+    config = Path.home() / ".gemini" / "config" / "hooks.json"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    current = json.loads(config.read_text()) if config.exists() else {}
+    data_dir = Path(os.environ.get("WARP_DATA_DIR", Path.home() / "Library/Application Support/Warp-42labs"))
+    installed = data_dir / "agent_state_adapters"
+    installed.mkdir(parents=True, exist_ok=True)
+    script = installed / "warp-42labs-antigravity.py"
+    shutil.copy2(ROOT / "antigravity/warp-42labs-antigravity.py", script)
+    script.chmod(0o755)
+    command = shlex.quote(str(script))
+    current["warp-42labs-agent-state"] = {"PreInvocation": [{"type": "command", "command": f"WARP_HOOK_EVENT=PreInvocation {command}"}], "Stop": [{"type": "command", "command": f"WARP_HOOK_EVENT=Stop {command}"}]}
+    rendered = json.dumps(current, indent=2) + "\n"
+    if not config.exists() or config.read_text() != rendered:
+        if config.exists(): backup(config)
+        config.write_text(rendered)
+
+
+def pi():
+    target = Path.home() / ".pi/agent/extensions/warp-42labs.ts"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(ROOT / "pi/warp-42labs.ts", target)
+
+
+def hermes():
+    target = Path.home() / ".hermes/plugins/warp-42labs"
+    target.mkdir(parents=True, exist_ok=True)
+    for name in ("plugin.yaml", "__init__.py"):
+        shutil.copy2(ROOT / "hermes" / name, target / name)
+    hermes_bin = shutil.which("hermes")
+    if hermes_bin:
+        subprocess.run([hermes_bin, "plugins", "enable", "warp-42labs"], check=True)
+
+
+parser = argparse.ArgumentParser()
+group = parser.add_mutually_exclusive_group(required=True)
+for target in ("all", "antigravity", "pi", "hermes"):
+    group.add_argument("--" + target, action="store_true")
+args = parser.parse_args()
+selected = "all" if args.all else next(name for name in ("antigravity", "pi", "hermes") if getattr(args, name))
+for name, fn in (("--antigravity", antigravity), ("--pi", pi), ("--hermes", hermes)):
+    if selected == "all" or selected == name[2:]: fn()
