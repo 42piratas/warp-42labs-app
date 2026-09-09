@@ -1,0 +1,4 @@
+name: warp-42labs
+version: 1.0.0
+description: Warp CLI-agent state notifications for Hermes
+entrypoint: __init__.py

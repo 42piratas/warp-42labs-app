@@ -47,6 +47,8 @@ pub fn is_agent_supported(agent: &CLIAgent) -> bool {
             | CLIAgent::Droid
             | CLIAgent::Pi
             | CLIAgent::OhMyPi
+            | CLIAgent::Hermes
+            | CLIAgent::Antigravity
             | CLIAgent::WarpTui
     )
 }
@@ -68,15 +70,15 @@ fn create_handler(agent: &CLIAgent) -> Option<Box<dyn CLIAgentSessionHandler>> {
         | CLIAgent::Droid
         | CLIAgent::Pi
         | CLIAgent::OhMyPi
+        | CLIAgent::Hermes
+        | CLIAgent::Antigravity
         | CLIAgent::WarpTui => Some(Box::new(DefaultSessionListener)),
         CLIAgent::Codex => Some(Box::new(CodexSessionHandler)),
-        CLIAgent::Hermes
-        | CLIAgent::Amp
+        CLIAgent::Amp
         | CLIAgent::Copilot
         | CLIAgent::CursorCli
         | CLIAgent::Goose
         | CLIAgent::Vibe
-        | CLIAgent::Antigravity
         | CLIAgent::Unknown => None,
     }
 }
