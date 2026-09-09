@@ -29,6 +29,12 @@ states:
 group_outline:
   # Empty disables automatic outlines. The group UUID chooses one entry stably.
   colors: [blue, magenta, cyan, green]
+  # Any positive value makes the outline thicker; zero disables it.
+  thickness: 2
+
+# Optional group backdrop override. Omit or set to null to keep the regular
+# group background/picker behavior.
+group_background: null
 "#;
 
 #[derive(Clone, Copy, Debug, Deserialize, Hash, PartialEq, Eq, Serialize)]
@@ -149,6 +155,7 @@ impl Default for AgentTabStates {
 #[serde(default, deny_unknown_fields)]
 pub struct AgentTabGroupOutline {
     pub colors: Vec<AgentTabColor>,
+    pub thickness: u16,
 }
 
 impl Default for AgentTabGroupOutline {
@@ -160,6 +167,7 @@ impl Default for AgentTabGroupOutline {
                 AgentTabColor::Cyan,
                 AgentTabColor::Green,
             ],
+            thickness: 2,
         }
     }
 }
@@ -170,6 +178,7 @@ pub struct AgentTabStyles {
     version: u8,
     pub states: AgentTabStates,
     pub group_outline: AgentTabGroupOutline,
+    pub group_background: Option<AgentTabColor>,
 }
 
 impl Default for AgentTabStyles {
@@ -178,6 +187,7 @@ impl Default for AgentTabStyles {
             version: 1,
             states: AgentTabStates::default(),
             group_outline: AgentTabGroupOutline::default(),
+            group_background: None,
         }
     }
 }
