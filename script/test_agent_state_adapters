@@ -30,6 +30,10 @@ def main():
         env = {**os.environ, "HOME": home, "WARP_DATA_DIR": str(Path(home) / "data")}
         subprocess.run([str(ROOT / "script/install_agent_state_adapters"), "--antigravity"], env=env, check=True)
         first = (Path(home) / ".gemini/config/hooks.json").read_bytes()
+        hook = json.loads(first)["warp-42labs-agent-state"]["PreInvocation"][0]["command"]
+        assert "ANTIGRAVITY_HOOK_EVENT=PreInvocation" in hook
+        assert json.loads(subprocess.run(["/bin/sh", "-c", hook], input="{}", text=True, capture_output=True,
+                                         env={**env, "WARP_CLI_AGENT_PROTOCOL_VERSION": "1", "WARP_CLIENT_VERSION": "test"}, check=True).stdout) == {}
         subprocess.run([str(ROOT / "script/install_agent_state_adapters"), "--antigravity"], env=env, check=True)
         assert first == (Path(home) / ".gemini/config/hooks.json").read_bytes()
     print("agent state adapter contracts: PASS")
