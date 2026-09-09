@@ -1,0 +1,43 @@
+#!/usr/bin/env python3
+"""Contract tests for the repo-owned agent-state adapter executables."""
+import json
+import os
+import subprocess
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+ADAPTER = ROOT / "resources/agent_state_adapters"
+
+
+def run(path, event, payload):
+    env = {**os.environ, "WARP_CLI_AGENT_PROTOCOL_VERSION": "1", "WARP_CLIENT_VERSION": "test", "ANTIGRAVITY_HOOK_EVENT": event}
+    return subprocess.run([str(path)], input=json.dumps(payload), text=True, capture_output=True, env=env, check=True)
+
+
+def main():
+    agy = ADAPTER / "antigravity/warp-42labs-antigravity.py"
+    assert json.loads(run(agy, "PreInvocation", {}).stdout) == {}
+    assert json.loads(run(agy, "Stop", {"fullyIdle": False}).stdout)["decision"] == "continue"
+    assert json.loads(run(agy, "Stop", {"fullyIdle": True, "terminationReason": "model_stop"}).stdout) == {}
+    assert json.loads(run(agy, "Stop", {"fullyIdle": True, "terminationReason": "error"}).stdout) == {}
+    hermes = ADAPTER / "hermes/__init__.py"
+    code = "import sys; sys.path.insert(0, sys.argv[1]); import __init__ as p; p.pre_llm_call()"
+    result = subprocess.run(["python3", "-c", code, str(hermes.parent)], capture_output=True, text=True,
+                            env={**os.environ, "WARP_CLI_AGENT_PROTOCOL_VERSION": "1", "WARP_CLIENT_VERSION": "test"}, check=True)
+    assert "prompt_submit" in result.stdout
+    with tempfile.TemporaryDirectory() as home:
+        env = {**os.environ, "HOME": home, "WARP_DATA_DIR": str(Path(home) / "data")}
+        subprocess.run([str(ROOT / "script/install_agent_state_adapters"), "--antigravity"], env=env, check=True)
+        first = (Path(home) / ".gemini/config/hooks.json").read_bytes()
+        hook = json.loads(first)["warp-42labs-agent-state"]["PreInvocation"][0]["command"]
+        assert "ANTIGRAVITY_HOOK_EVENT=PreInvocation" in hook
+        assert json.loads(subprocess.run(["/bin/sh", "-c", hook], input="{}", text=True, capture_output=True,
+                                         env={**env, "WARP_CLI_AGENT_PROTOCOL_VERSION": "1", "WARP_CLIENT_VERSION": "test"}, check=True).stdout) == {}
+        subprocess.run([str(ROOT / "script/install_agent_state_adapters"), "--antigravity"], env=env, check=True)
+        assert first == (Path(home) / ".gemini/config/hooks.json").read_bytes()
+    print("agent state adapter contracts: PASS")
+
+
+if __name__ == "__main__":
+    main()
