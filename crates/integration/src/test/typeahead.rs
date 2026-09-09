@@ -13,7 +13,7 @@ use warpui_core::integration::{AssertionCallback, AssertionOutcome, TestStep};
 use warpui_core::{async_assert, async_assert_eq};
 
 use super::{Builder, new_builder};
-use crate::util::skip_if_powershell_core_2303;
+use crate::util::{ShellRcType, skip_if_powershell_core_2303, write_rc_files_for_test};
 
 pub fn test_typeahead() -> Builder {
     new_builder()
@@ -53,12 +53,15 @@ pub fn test_typeahead() -> Builder {
 /// happens in integration tests because of how quickly the
 /// command is entered.
 macro_rules! check_command {
-    ($command:expr, $expected:expr) => {
+    ($command:expr, $expected:expr, $allow_precondition_retry:expr) => {
         let command = $command;
         if command.contains("^[i") {
-            return AssertionOutcome::PreconditionFailed(format!(
-                "Flake: input reporting keybinding sent too early on `{command}`"
-            ));
+            if $allow_precondition_retry {
+                return AssertionOutcome::PreconditionFailed(format!(
+                    "Flake: input reporting keybinding sent too early on `{command}`"
+                ));
+            }
+            panic!("input reporting keybinding was sent too early on `{command}`");
         } else {
             assert_eq!(command, $expected);
         }
@@ -68,6 +71,14 @@ macro_rules! check_command {
 /// Tests that the shell reports its input buffer to the Warp typeahead model after
 /// a long-running command completes.
 pub fn test_input_reporting_posix_shells() -> Builder {
+    input_reporting_posix_shells(false)
+}
+
+pub fn test_input_reporting_survives_slow_zsh_preexec() -> Builder {
+    input_reporting_posix_shells(true)
+}
+
+fn input_reporting_posix_shells(slow_zsh_preexec: bool) -> Builder {
     // When the shell can report its input buffer, we can handle typeahead with
     // line editing. When matching user input ourselves (only on pre-4.0 bash),
     // we do not support line edits.
@@ -100,7 +111,22 @@ pub fn test_input_reporting_posix_shells() -> Builder {
     }
 
     new_builder()
-        .set_should_run_test(move || starter.shell_type() != ShellType::PowerShell)
+        .set_should_run_test(move || {
+            if slow_zsh_preexec {
+                starter.shell_type() == ShellType::Zsh
+            } else {
+                starter.shell_type() != ShellType::PowerShell
+            }
+        })
+        .with_setup(move |utils| {
+            if slow_zsh_preexec {
+                write_rc_files_for_test(
+                    utils.test_dir(),
+                    "slow_preexec() { sleep 0.2; }\npreexec_functions+=(slow_preexec)",
+                    [ShellRcType::Zsh],
+                );
+            }
+        })
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
         .with_step(
             TestStep::new("Execute sleep")
@@ -117,7 +143,7 @@ pub fn test_input_reporting_posix_shells() -> Builder {
                     "Typeahead is in input editor",
                     assert_input_editor_contents(0, "ls -l"),
                 )
-                .add_named_assertion("Intermediate commands ran", |app, window_id| {
+                .add_named_assertion("Intermediate commands ran", move |app, window_id| {
                     let terminal_view = single_terminal_view_for_tab(app, window_id, 0);
                     terminal_view.read(app, |view, _| {
                         let model = view.model.lock();
@@ -129,25 +155,33 @@ pub fn test_input_reporting_posix_shells() -> Builder {
 
                         let sleep_3_block =
                             blocks.block_at(start_index).expect("Block should exist");
-                        check_command!(sleep_3_block.command_to_string(), "sleep 3");
+                        check_command!(
+                            sleep_3_block.command_to_string(),
+                            "sleep 3",
+                            !slow_zsh_preexec
+                        );
 
                         let true_block = blocks
                             .block_at(start_index + BlockIndex::from(1))
                             .expect("Block should exist");
                         assert!(!true_block.is_background());
-                        check_command!(true_block.command_to_string(), "true");
+                        check_command!(true_block.command_to_string(), "true", !slow_zsh_preexec);
 
                         let sleep_1_block = blocks
                             .block_at(start_index + BlockIndex::from(2))
                             .expect("Block should exist");
                         assert!(!sleep_1_block.is_background());
-                        check_command!(sleep_1_block.command_to_string(), "sleep 1");
+                        check_command!(
+                            sleep_1_block.command_to_string(),
+                            "sleep 1",
+                            !slow_zsh_preexec
+                        );
 
                         let pwd_block = blocks
                             .block_at(start_index + BlockIndex::from(3))
                             .expect("Block should exist");
                         assert!(!pwd_block.is_background());
-                        check_command!(pwd_block.command_to_string(), "pwd");
+                        check_command!(pwd_block.command_to_string(), "pwd", !slow_zsh_preexec);
 
                         // On shells that support input reporting, there will be
                         // an empty block that formerly held echoed typeahead. On

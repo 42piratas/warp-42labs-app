@@ -12,6 +12,7 @@ use crate::searcher::{
     AsyncSearcher, CustomTokenizer, FullTextSearchDocumentEntry, FullTextSearchFieldValue,
     MIN_MEMORY_BUDGET, PendingRebuild, QueuedItem, SearchDocumentEntry, SearchSchemaConfig,
     SearcherEvent, SearcherProducerState, SimpleFullTextSearcher, merge_with_rebuild,
+    process_searcher_events,
 };
 
 /// Builds an [`AsyncSearcher`] with no background writer draining its channel, so a test can
@@ -775,8 +776,8 @@ fn test_searcher_async_rebuild_is_not_delayed_when_its_marker_is_never_sent() {
     );
 
     let background_executor = Arc::new(Background::default());
-    let searcher_async =
-        TEST_SCHEMA.create_async_searcher(MIN_MEMORY_BUDGET, background_executor.clone());
+    let (searcher_async, events_rx) =
+        async_searcher_without_background_writer(TEST_SCHEMA.create_searcher(MIN_MEMORY_BUDGET));
 
     {
         let mut state = searcher_async.producer_state.lock();
@@ -793,6 +794,14 @@ fn test_searcher_async_rebuild_is_not_delayed_when_its_marker_is_never_sent() {
             ],
         });
     }
+
+    background_executor
+        .spawn(process_searcher_events(
+            events_rx,
+            searcher_async.producer_state.clone(),
+            searcher_async.searcher.writer.clone(),
+        ))
+        .detach();
 
     let converged = poll_until(Duration::from_secs(2), || {
         searcher_async

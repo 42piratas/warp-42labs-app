@@ -26348,10 +26348,14 @@ impl TerminalView {
         self.cursor_position_id.clone()
     }
 
-    fn drag_and_drop_files(&mut self, paths: &[String], ctx: &mut ViewContext<Self>) {
+    fn drag_and_drop_files(
+        &mut self,
+        paths: &[String],
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<SpawnedFutureHandle> {
         self.is_file_drop_target = false;
         if paths.is_empty() {
-            return;
+            return None;
         }
 
         // Focus this pane when files are dropped on it.
@@ -26382,8 +26386,7 @@ impl TerminalView {
             && self.has_active_cli_agent_session(ctx)
             && !CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.view_id)
         {
-            self.paste_dropped_images_to_cli_agent(image_filepaths, ctx);
-            return;
+            return self.paste_dropped_images_to_cli_agent(image_filepaths, ctx);
         }
 
         if !is_in_long_running_command {
@@ -26398,17 +26401,14 @@ impl TerminalView {
 
                 // If dropped only image file paths, we are done
                 if num_attached == paths.len() {
-                    return; // Return early, don't insert file paths
+                    return None; // Return early, don't insert file paths
                 }
             }
         }
 
-        let Some(session) = self
+        let session = self
             .active_block_session_id()
-            .and_then(|session_id| self.sessions.as_ref(ctx).get(session_id))
-        else {
-            return;
-        };
+            .and_then(|session_id| self.sessions.as_ref(ctx).get(session_id))?;
 
         let sshed = session.is_ssh_wrapper_session();
         if sshed && !paths.is_empty() && FeatureFlag::SshDragAndDrop.is_enabled() {
@@ -26425,7 +26425,7 @@ impl TerminalView {
             if is_msys2_long_running {
                 let input = warpui::clipboard_utils::escaped_paths_str(paths, None);
                 self.typed_characters_on_terminal(&input, ctx);
-                return;
+                return None;
             }
 
             // For WSL sessions on Windows, convert paths to /mnt/<drive>/... format
@@ -26445,6 +26445,8 @@ impl TerminalView {
                 warpui::clipboard_utils::escaped_paths_str(paths, Some(self.shell_family(ctx)));
             self.typed_characters_on_terminal(&input, ctx);
         }
+
+        None
     }
 
     pub fn initiate_ssh_file_upload(&self, paths: &[String], ctx: &mut ViewContext<Self>) {
@@ -27600,7 +27602,7 @@ impl TypedActionView for TerminalView {
                 self.scroll_to_and_maybe_select_block(*block_index, ctx)
             }
             DragAndDropFiles(paths) => {
-                self.drag_and_drop_files(paths, ctx);
+                let _ = self.drag_and_drop_files(paths, ctx);
             }
             SetInputModeAgent => {
                 // Guard: when a CLI agent session is active, block mode

@@ -163,6 +163,7 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_add_windows_correct_position_and_cascade);
     register_test!(test_typeahead);
     register_test!(test_input_reporting_posix_shells);
+    register_test!(test_input_reporting_survives_slow_zsh_preexec);
     register_test!(test_input_reporting_powershell);
     register_test!(test_background_output);
     register_test!(test_home_key_should_not_appear_in_input);

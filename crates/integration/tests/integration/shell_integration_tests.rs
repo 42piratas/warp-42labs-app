@@ -29,6 +29,8 @@ integration_tests! {
     test_typeahead,
     // Test input reporting behavior.
     test_input_reporting_posix_shells,
+    // Test zsh input reporting when a user hook delays Warp's preexec hook.
+    test_input_reporting_survives_slow_zsh_preexec,
     test_input_reporting_powershell,
     // Test background output behavior.
     test_background_output,
