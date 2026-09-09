@@ -1,5 +1,5 @@
 use super::{
-    ANNOTATED_DEFAULT, AgentTabBadgeSize, AgentTabColor, AgentTabStyleLayer, AgentTabStyles,
+    AgentTabBadgeSize, AgentTabColor, AgentTabStyleLayer, AgentTabStyles, ANNOTATED_DEFAULT,
 };
 
 #[test]
@@ -24,6 +24,14 @@ fn agent_tab_styles_config_contract() {
     );
     assert_eq!(partial.states.processing, defaults.states.processing);
 
+    let group = AgentTabStyles::parse(
+        "version: 1\ngroup_background: cyan\ngroup_outline:\n  colors: [red]\n  thickness: 4",
+    )
+    .expect("group styling should parse");
+    assert_eq!(group.group_background, Some(AgentTabColor::Cyan));
+    assert_eq!(group.group_outline.colors, [AgentTabColor::Red]);
+    assert_eq!(group.group_outline.thickness, 4);
+
     for invalid in [
         "version: 2",
         "version: 1\nunknown: true",
@@ -32,6 +40,8 @@ fn agent_tab_styles_config_contract() {
         "version: 1\nstates:\n  idle:\n    layers: [tab_bg, unknown]",
         "version: 1\nstates:\n  idle:\n    layers: [tab_bg, tab_bg]",
         "version: 1\ngroup_outline:\n  colors: [blue, blue]",
+        "version: 1\ngroup_outline:\n  thickness: -1",
+        "version: 1\ngroup_outline:\n  thickness: 65536",
     ] {
         assert!(
             AgentTabStyles::parse(invalid).is_err(),
