@@ -29,7 +29,7 @@ def antigravity():
     shutil.copy2(ROOT / "antigravity/warp-42labs-antigravity.py", script)
     script.chmod(0o755)
     command = shlex.quote(str(script))
-    current["warp-42labs-agent-state"] = {"PreInvocation": [{"type": "command", "command": f"WARP_HOOK_EVENT=PreInvocation {command}"}], "Stop": [{"type": "command", "command": f"WARP_HOOK_EVENT=Stop {command}"}]}
+    current["warp-42labs-agent-state"] = {"PreInvocation": [{"type": "command", "command": f"ANTIGRAVITY_HOOK_EVENT=PreInvocation {command}"}], "Stop": [{"type": "command", "command": f"ANTIGRAVITY_HOOK_EVENT=Stop {command}"}]}
     rendered = json.dumps(current, indent=2) + "\n"
     if not config.exists() or config.read_text() != rendered:
         if config.exists(): backup(config)

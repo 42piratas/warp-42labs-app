@@ -2,3 +2,8 @@ name: warp-42labs
 version: 1.0.0
 description: Warp CLI-agent state notifications for Hermes
 entrypoint: __init__.py
+provides_hooks:
+  - pre_llm_call
+  - post_llm_call
+  - pre_approval_request
+  - post_approval_response
