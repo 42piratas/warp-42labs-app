@@ -36,7 +36,7 @@ use warp_core::ui::theme::color::internal_colors;
 use warp_errors::report_error;
 use warp_terminal::model::escape_sequences::{BRACKETED_PASTE_END, BRACKETED_PASTE_START};
 use warpify_footer::{WarpifyFooterView, WarpifyFooterViewEvent};
-use warpui::r#async::Timer;
+use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::elements::{
     ChildView, Container, CrossAxisAlignment, Empty, Expanded, Flex, MainAxisSize, ParentElement,
 };
@@ -131,6 +131,7 @@ fn rich_input_submit_strategy(agent: CLIAgent) -> RichInputSubmitStrategy {
         | CLIAgent::OpenCode
         | CLIAgent::Gemini
         | CLIAgent::Auggie
+        | CLIAgent::Grok
         | CLIAgent::CursorCli => RichInputSubmitStrategy::DelayedEnter,
         CLIAgent::Hermes => RichInputSubmitStrategy::BracketedPaste,
         CLIAgent::Amp
@@ -918,12 +919,12 @@ impl TerminalView {
         &mut self,
         image_filepaths: Vec<String>,
         ctx: &mut ViewContext<Self>,
-    ) {
+    ) -> Option<SpawnedFutureHandle> {
         if image_filepaths.is_empty() {
-            return;
+            return None;
         }
         let spawner = ctx.spawner();
-        ctx.spawn(
+        Some(ctx.spawn(
             async move {
                 for path_str in image_filepaths {
                     // Stat first so a multi-GB drop doesn't load into memory
@@ -1015,7 +1016,7 @@ impl TerminalView {
                 }
             },
             |_, _, _| {},
-        );
+        ))
     }
 
     /// Writes the input text to the PTY and then sends a carriage return to

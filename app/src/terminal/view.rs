@@ -12333,13 +12333,14 @@ impl TerminalView {
                                         },
                                     );
 
-                                    // Codex doesn't use the sentinel-based plugin protocol,
-                                    // so create the listener proactively on command detection
-                                    // (rather than waiting for a SessionStart event).
-                                    if matches!(detection, Some((CLIAgent::Codex, _))) {
+                                    // Codex and Grok use OSC 9 (and optional rich OSC 777)
+                                    // without requiring a SessionStart sentinel first, so
+                                    // create the listener proactively on command detection.
+                                    if let Some((agent @ (CLIAgent::Codex | CLIAgent::Grok), _)) =
+                                        detection
+                                    {
                                         me.register_cli_agent_listener_without_session_start_event(
-                                            CLIAgent::Codex,
-                                            ctx,
+                                            agent, ctx,
                                         );
                                     }
 
@@ -13612,8 +13613,8 @@ impl TerminalView {
         &self,
         ctx: &AppContext,
     ) -> Option<AIConversationId> {
-        let task_id =
-            LocalAgentTaskSyncModel::as_ref(ctx).task_id_for_terminal_view(self.view_id)?;
+        let task_id = LocalAgentTaskSyncModel::as_ref(ctx)
+            .cli_harness_task_id_for_terminal_view(self.view_id)?;
         let matches_task = |conversation: &&AIConversation| conversation.task_id() == Some(task_id);
 
         let history_model = BlocklistAIHistoryModel::as_ref(ctx);
@@ -26347,10 +26348,14 @@ impl TerminalView {
         self.cursor_position_id.clone()
     }
 
-    fn drag_and_drop_files(&mut self, paths: &[String], ctx: &mut ViewContext<Self>) {
+    fn drag_and_drop_files(
+        &mut self,
+        paths: &[String],
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<SpawnedFutureHandle> {
         self.is_file_drop_target = false;
         if paths.is_empty() {
-            return;
+            return None;
         }
 
         // Focus this pane when files are dropped on it.
@@ -26381,8 +26386,7 @@ impl TerminalView {
             && self.has_active_cli_agent_session(ctx)
             && !CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.view_id)
         {
-            self.paste_dropped_images_to_cli_agent(image_filepaths, ctx);
-            return;
+            return self.paste_dropped_images_to_cli_agent(image_filepaths, ctx);
         }
 
         if !is_in_long_running_command {
@@ -26397,17 +26401,14 @@ impl TerminalView {
 
                 // If dropped only image file paths, we are done
                 if num_attached == paths.len() {
-                    return; // Return early, don't insert file paths
+                    return None; // Return early, don't insert file paths
                 }
             }
         }
 
-        let Some(session) = self
+        let session = self
             .active_block_session_id()
-            .and_then(|session_id| self.sessions.as_ref(ctx).get(session_id))
-        else {
-            return;
-        };
+            .and_then(|session_id| self.sessions.as_ref(ctx).get(session_id))?;
 
         let sshed = session.is_ssh_wrapper_session();
         if sshed && !paths.is_empty() && FeatureFlag::SshDragAndDrop.is_enabled() {
@@ -26424,7 +26425,7 @@ impl TerminalView {
             if is_msys2_long_running {
                 let input = warpui::clipboard_utils::escaped_paths_str(paths, None);
                 self.typed_characters_on_terminal(&input, ctx);
-                return;
+                return None;
             }
 
             // For WSL sessions on Windows, convert paths to /mnt/<drive>/... format
@@ -26444,6 +26445,8 @@ impl TerminalView {
                 warpui::clipboard_utils::escaped_paths_str(paths, Some(self.shell_family(ctx)));
             self.typed_characters_on_terminal(&input, ctx);
         }
+
+        None
     }
 
     pub fn initiate_ssh_file_upload(&self, paths: &[String], ctx: &mut ViewContext<Self>) {
@@ -27599,7 +27602,7 @@ impl TypedActionView for TerminalView {
                 self.scroll_to_and_maybe_select_block(*block_index, ctx)
             }
             DragAndDropFiles(paths) => {
-                self.drag_and_drop_files(paths, ctx);
+                let _ = self.drag_and_drop_files(paths, ctx);
             }
             SetInputModeAgent => {
                 // Guard: when a CLI agent session is active, block mode

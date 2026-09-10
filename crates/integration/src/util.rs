@@ -1,4 +1,4 @@
-use std::fs::{OpenOptions, create_dir_all, write};
+use std::fs::{OpenOptions, create_dir_all, read_to_string, write};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -15,6 +15,8 @@ use warp::terminal::shell::ShellType;
 use warpui_core::{App, WindowId};
 
 use crate::builder::cargo_target_tmpdir;
+
+pub const INTEGRATION_TEST_PATH_ENV_VAR: &str = "WARP_INTEGRATION_TEST_PATH";
 
 pub fn get_input_buffer(
     app: &App,
@@ -137,6 +139,32 @@ where
     C: AsRef<str>,
 {
     write_rc_files_for_test(dir, rc_contents, ShellRcType::iter())
+}
+
+pub fn restore_path_in_login_shell_rc_files(dir: impl AsRef<Path>) {
+    let startup_files = [
+        (
+            Path::new(".bash_profile"),
+            format!("export PATH=\"${INTEGRATION_TEST_PATH_ENV_VAR}\""),
+        ),
+        (
+            Path::new(".zprofile"),
+            format!("export PATH=\"${INTEGRATION_TEST_PATH_ENV_VAR}\""),
+        ),
+        (
+            Path::new(".config/fish/config.fish"),
+            format!("set --export PATH (string split : -- \"${INTEGRATION_TEST_PATH_ENV_VAR}\")"),
+        ),
+    ];
+
+    for (relative_path, restore_path) in startup_files {
+        let path = dir.as_ref().join(relative_path);
+        create_dir_all(path.parent().expect("Parent of RC file path should exist"))
+            .expect("Should be able to create path to RC file");
+        let existing = read_to_string(&path).unwrap_or_default();
+        write(&path, format!("{restore_path}\n{existing}"))
+            .unwrap_or_else(|error| panic!("Could not write rc file {:?}: {error}", path.to_str()));
+    }
 }
 
 /// Writes a histfile for `shell_types` to the given `dir`.

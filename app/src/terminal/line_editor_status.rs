@@ -99,6 +99,9 @@ impl LineEditorStatus {
             ModelEvent::Handler(AnsiHandlerEvent::Preexec) => {
                 self.set_line_editor_inactive(ctx);
             }
+            ModelEvent::Handler(AnsiHandlerEvent::UnsetBracketedPaste) if is_active_session_zsh => {
+                self.set_line_editor_inactive(ctx);
+            }
             _ => (),
         }
     }
@@ -150,3 +153,7 @@ pub enum LineEditorStatusEvent {
 impl Entity for LineEditorStatus {
     type Event = LineEditorStatusEvent;
 }
+
+#[cfg(test)]
+#[path = "line_editor_status_tests.rs"]
+mod tests;

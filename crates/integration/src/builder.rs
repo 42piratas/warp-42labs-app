@@ -9,7 +9,10 @@ use warpui_core::{App, WindowId};
 use warpui_extras::user_preferences::UserPreferences;
 use warpui_extras::user_preferences::file_backed::FileBackedUserPreferences;
 
-use crate::util::{ShellRcType, set_zsh_histfile_location, write_rc_files_for_test};
+use crate::util::{
+    INTEGRATION_TEST_PATH_ENV_VAR, ShellRcType, restore_path_in_login_shell_rc_files,
+    set_zsh_histfile_location, write_rc_files_for_test,
+};
 
 // We have logic in our build script to pass the path of the cargo target
 // tmp directory to our app. This needs to be done as a build script because
@@ -168,6 +171,7 @@ impl Builder {
             mut setup,
             user_prefs,
         } = self;
+        let invoking_path = std::env::var_os("PATH").expect("integration tests require PATH");
 
         let inner = inner.with_setup(move |utils| {
             let dir = utils.test_dir();
@@ -177,6 +181,9 @@ impl Builder {
                 [ShellRcType::Bash, ShellRcType::Zsh, ShellRcType::Fish],
             );
             set_zsh_histfile_location(&dir);
+            std::fs::File::create(dir.join(".hushlogin"))
+                .expect("should create .hushlogin in test home");
+            utils.set_env(INTEGRATION_TEST_PATH_ENV_VAR, Some(&invoking_path));
 
             // Set the DISABLE_SAVE_ENV_VAR to make sure we don't write any keybinding changes to the
             // filesystem
@@ -193,6 +200,7 @@ impl Builder {
             if let Some(ref mut callback) = setup {
                 callback(utils);
             }
+            restore_path_in_login_shell_rc_files(dir);
         });
 
         let driver = inner.build(test_name, create_temp_dir_for_test);

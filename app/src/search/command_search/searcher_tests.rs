@@ -26,7 +26,7 @@ use crate::search::command_search::workflows::{WorkflowIdentity, WorkflowSearchI
 use crate::search::data_source::{Query, QueryResult};
 use crate::search::item::SearchItem;
 use crate::search::mixer::{
-    AddAsyncSourceOptions, AsyncDataSource, BoxFuture, DataSourceRunErrorWrapper,
+    AddAsyncSourceOptions, AsyncDataSource, BoxFuture, DataSourceRunErrorWrapper, SearchMixerEvent,
 };
 use crate::search::result_renderer::ItemHighlightState;
 use crate::search::workflows::fuzzy_match::FuzzyMatchWorkflowResult;
@@ -191,14 +191,12 @@ fn test_history_data_source_reflects_live_exit_status_update() {
         ));
         let session_id = session.id();
 
-        let history_handle = History::handle(&app);
+        let mut history_handle = History::handle(&app);
         history_handle.update(&mut app, |history, ctx| {
             history.init_session_with(session.clone(), async { vec![] }, ctx);
         });
-        assert_eventually!(
-            history_handle.read(&app, |history, _ctx| history.is_queryable(&session_id)),
-            "history should become queryable once the (empty) histfile read completes"
-        );
+        History::initialized_sessions(&mut history_handle, &mut app, vec![session_id]).await;
+        assert!(history_handle.read(&app, |history, _ctx| history.is_queryable(&session_id)));
 
         let start_ts = Local::now();
         history_handle.update(&mut app, |history, _ctx| {
@@ -209,6 +207,14 @@ fn test_history_data_source_reflects_live_exit_status_update() {
         });
 
         let mixer = app.add_model(|_| CommandSearchMixer::new());
+        let (results_tx, results_rx) = async_channel::unbounded();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&mixer, move |_, event, _| {
+                if matches!(event, SearchMixerEvent::ResultsChanged) {
+                    let _ = results_tx.try_send(());
+                }
+            });
+        });
         mixer.update(&mut app, |mixer, ctx| {
             mixer.add_async_source(
                 history_data_source_for_session(session_id),
@@ -222,7 +228,11 @@ fn test_history_data_source_reflects_live_exit_status_update() {
             );
             mixer.run_query("deploy prod".into(), ctx);
         });
-        assert_eventually!(
+        results_rx
+            .recv()
+            .await
+            .expect("the first query should finish loading");
+        assert!(
             app.read(|app| !mixer.as_ref(app).is_loading()),
             "the first query should finish loading"
         );
@@ -236,7 +246,11 @@ fn test_history_data_source_reflects_live_exit_status_update() {
         mixer.update(&mut app, |mixer, ctx| {
             mixer.run_query("deploy prod".into(), ctx);
         });
-        assert_eventually!(
+        results_rx
+            .recv()
+            .await
+            .expect("the second query should finish loading");
+        assert!(
             app.read(|app| !mixer.as_ref(app).is_loading()),
             "the second query should finish loading"
         );
