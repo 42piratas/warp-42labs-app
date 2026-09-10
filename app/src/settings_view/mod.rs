@@ -26,7 +26,7 @@ use settings_page::{
     SettingsPageViewHandle,
 };
 use show_blocks_view::{ShowBlocksEvent, ShowBlocksView};
-use teams_page::{TeamsPageView, TeamsPageViewEvent};
+use teams_page::{TeamsPageAction, TeamsPageView, TeamsPageViewEvent};
 use warp_agent_page::{WarpAgentPageAction, WarpAgentPageEvent, WarpAgentPageView};
 use warp_core::channel::ChannelState;
 use warp_core::context_flag::ContextFlag;
@@ -97,6 +97,7 @@ mod execution_profile_view;
 mod features;
 mod features_page;
 pub(crate) mod handoff_environment_creation_modal;
+mod join_teams_modal;
 pub mod keybindings;
 mod knowledge_page;
 mod main_page;
@@ -2149,6 +2150,16 @@ impl SettingsView {
             view.update(ctx, |view, ctx| {
                 view.open_team_members(email, ctx);
             })
+        }
+    }
+
+    pub fn open_teams_page_join_modal(&mut self, ctx: &mut ViewContext<Self>) {
+        if let Some(team_page) = self.settings_page(SettingsSection::Teams)
+            && let SettingsPageViewHandle::Teams(view) = &team_page.view_handle
+        {
+            view.update(ctx, |view, ctx| {
+                view.handle_action(&TeamsPageAction::ShowJoinTeamsModal, ctx);
+            });
         }
     }
 
