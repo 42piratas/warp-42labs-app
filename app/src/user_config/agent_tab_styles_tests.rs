@@ -1,5 +1,5 @@
 use super::{
-    AgentTabBadgeSize, AgentTabColor, AgentTabStyleLayer, AgentTabStyles, ANNOTATED_DEFAULT,
+    ANNOTATED_DEFAULT, AgentTabBadgeSize, AgentTabColor, AgentTabStyleLayer, AgentTabStyles,
 };
 
 #[test]
