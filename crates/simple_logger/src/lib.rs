@@ -111,7 +111,7 @@ impl SimpleLogger {
             let mut log_file = match open_truncated(&log_path).await {
                 Ok(log_file) => log_file,
                 Err(e) => {
-                    log::warn!("Could not open file for logging: {:?}. {:?}", &log_path, e);
+                    log::warn!("Could not open file for logging: {:?}. {:?}", log_path, e);
                     return;
                 }
             };
@@ -154,7 +154,7 @@ impl SimpleLogger {
                                             "SimpleLogger: rotation failed for {:?}: {e}; \
                                              preserving existing log content and continuing \
                                              in append mode",
-                                            &log_path,
+                                            log_path,
                                         );
                                         true
                                     }
@@ -170,7 +170,7 @@ impl SimpleLogger {
                                     log::warn!(
                                         "SimpleLogger: failed to reopen {:?} after \
                                              rotation: {e}",
-                                        &log_path,
+                                        log_path,
                                     );
                                     return;
                                 }

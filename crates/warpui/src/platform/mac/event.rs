@@ -78,10 +78,9 @@ pub unsafe fn from_native(
                     .to_str()
                     .ok()?;
 
-                let unmodified_chars = if let Some(first_char) = unmodified_chars.chars().next() {
+                let unmodified_chars = {
+                    let first_char = unmodified_chars.chars().next()?;
                     unicode_char_to_key(first_char as u16).unwrap_or(unmodified_chars)
-                } else {
-                    return None;
                 };
 
                 let keystroke = Keystroke {

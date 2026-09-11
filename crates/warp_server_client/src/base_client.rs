@@ -384,6 +384,8 @@ impl BaseClient {
             return stream;
         }
         let event_sender = self.event_sender();
+        // The stream's public error type is fixed by reqwest-eventsource; preserve it unchanged.
+        #[allow(clippy::result_large_err)]
         let wrapped = stream.map(move |event| {
             if let Err(reqwest_eventsource::Error::InvalidStatusCode(status, ref response)) = event
                 && http_client::iap::is_iap_challenge(status, response.headers())

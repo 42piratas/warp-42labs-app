@@ -1,3 +1,5 @@
+#![allow(clippy::single_range_in_vec_init)] // Helpers intentionally require Vec<RangeInclusive<_>>.
+
 use bimap::BiMap;
 use itertools::Itertools;
 
