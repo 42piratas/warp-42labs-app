@@ -225,6 +225,30 @@ def test_backup_preserves_each_distinct_rewrite_with_a_fixed_timestamp():
         }
 
 
+def test_antigravity_installer_uses_warposs_data_dir_by_default():
+    with tempfile.TemporaryDirectory() as temp:
+        home = Path(temp)
+        env = {**os.environ, "HOME": str(home)}
+        env.pop("WARP_DATA_DIR", None)
+
+        install("--antigravity", env)
+
+        assert (home / ".warp-oss/agent_state_adapters/warp-42labs-antigravity.py").exists()
+        assert not (home / "Library/Application Support/Warp-42labs").exists()
+
+
+def test_antigravity_installer_honors_warp_data_dir_override():
+    with tempfile.TemporaryDirectory() as temp:
+        home = Path(temp)
+        override = home / "custom-warp-data"
+        env = {**os.environ, "HOME": str(home), "WARP_DATA_DIR": str(override)}
+
+        install("--antigravity", env)
+
+        assert (override / "agent_state_adapters/warp-42labs-antigravity.py").exists()
+        assert not (home / ".warp-oss").exists()
+
+
 def test_installer_target_isolation_backup_byte_stability_and_all():
     with tempfile.TemporaryDirectory() as temp:
         home = Path(temp)
@@ -293,6 +317,8 @@ def main():
     test_pi_recorded_event_mapping_and_gating()
     test_hermes_callbacks_privacy_api_error_omission_and_gating()
     test_backup_preserves_each_distinct_rewrite_with_a_fixed_timestamp()
+    test_antigravity_installer_uses_warposs_data_dir_by_default()
+    test_antigravity_installer_honors_warp_data_dir_override()
     test_installer_target_isolation_backup_byte_stability_and_all()
     test_shipped_hermes_plugin_doctor()
     print("agent state adapter contracts: PASS")
