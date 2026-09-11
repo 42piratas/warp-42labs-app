@@ -334,7 +334,8 @@ pub async fn run_capture_loop(app: crate::App, state: CaptureLoopState) {
 fn rgba_to_rgb(rgba: &[u8]) -> Vec<u8> {
     let pixel_count = rgba.len() / 4;
     let mut rgb = Vec::with_capacity(pixel_count * 3);
-    for chunk in rgba.chunks_exact(4) {
+    let (pixels, _) = rgba.as_chunks::<4>();
+    for chunk in pixels {
         rgb.push(chunk[0]);
         rgb.push(chunk[1]);
         rgb.push(chunk[2]);

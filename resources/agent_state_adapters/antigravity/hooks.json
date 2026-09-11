@@ -1,10 +1,10 @@
 {
   "warp-42labs-agent-state": {
     "PreInvocation": [
-      { "type": "command", "command": "WARP_HOOK_EVENT=PreInvocation warp-42labs-antigravity.py" }
+      { "type": "command", "command": "ANTIGRAVITY_HOOK_EVENT=PreInvocation warp-42labs-antigravity.py" }
     ],
     "Stop": [
-      { "type": "command", "command": "WARP_HOOK_EVENT=Stop warp-42labs-antigravity.py" }
+      { "type": "command", "command": "ANTIGRAVITY_HOOK_EVENT=Stop warp-42labs-antigravity.py" }
     ]
   }
 }

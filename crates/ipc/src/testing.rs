@@ -68,7 +68,7 @@ where
         match response {
             Some(result) => result,
             None => {
-                panic!("Unexpected IPC call with request: {:?}", &request);
+                panic!("Unexpected IPC call with request: {:?}", request);
             }
         }
     }

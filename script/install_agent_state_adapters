@@ -15,6 +15,10 @@ ROOT = Path(__file__).resolve().parents[1] / "resources" / "agent_state_adapters
 def backup(path):
     stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     target = path.with_name(path.name + ".bak." + stamp)
+    suffix = 1
+    while target.exists():
+        target = path.with_name(path.name + ".bak." + stamp + f".{suffix}")
+        suffix += 1
     shutil.copy2(path, target)
 
 
@@ -43,20 +47,29 @@ def pi():
 
 
 def hermes():
-    target = Path.home() / ".hermes/plugins/warp-42labs"
+    target = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes")) / "plugins/warp-42labs"
     target.mkdir(parents=True, exist_ok=True)
     for name in ("plugin.yaml", "__init__.py"):
         shutil.copy2(ROOT / "hermes" / name, target / name)
     hermes_bin = shutil.which("hermes")
     if hermes_bin:
-        subprocess.run([hermes_bin, "plugins", "enable", "warp-42labs"], check=True)
+        subprocess.run(
+            [hermes_bin, "plugins", "enable", "warp-42labs", "--no-allow-tool-override"], check=True
+        )
 
 
-parser = argparse.ArgumentParser()
-group = parser.add_mutually_exclusive_group(required=True)
-for target in ("all", "antigravity", "pi", "hermes"):
-    group.add_argument("--" + target, action="store_true")
-args = parser.parse_args()
-selected = "all" if args.all else next(name for name in ("antigravity", "pi", "hermes") if getattr(args, name))
-for name, fn in (("--antigravity", antigravity), ("--pi", pi), ("--hermes", hermes)):
-    if selected == "all" or selected == name[2:]: fn()
+def main():
+    parser = argparse.ArgumentParser()
+    group = parser.add_mutually_exclusive_group(required=True)
+    for target in ("all", "antigravity", "pi", "hermes"):
+        group.add_argument("--" + target, action="store_true")
+    args = parser.parse_args()
+    selected = "all" if args.all else next(
+        name for name in ("antigravity", "pi", "hermes") if getattr(args, name)
+    )
+    for name, fn in (("--antigravity", antigravity), ("--pi", pi), ("--hermes", hermes)):
+        if selected == "all" or selected == name[2:]: fn()
+
+
+if __name__ == "__main__":
+    main()

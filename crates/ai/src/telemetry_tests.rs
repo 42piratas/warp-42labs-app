@@ -1,5 +1,3 @@
-use warp_core::telemetry::TelemetryEvent as _;
-
 use super::*;
 
 #[test]

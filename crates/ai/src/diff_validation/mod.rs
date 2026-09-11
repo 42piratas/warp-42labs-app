@@ -176,7 +176,7 @@ impl fmt::Debug for DiffDelta {
             write!(
                 f,
                 "DiffDelta {{\nreplacement_line_range: {:?},",
-                &self.replacement_line_range
+                self.replacement_line_range
             )?;
             f.write_str("\n--insertion--\n")?;
             f.write_str(&self.insertion)?;
@@ -728,7 +728,7 @@ fn score_matches<T: Scorer>(
             log::debug!(
                 "Closest match with score {}:\n{}",
                 max_similarity,
-                &target_lines[range].join("\n")
+                target_lines[range].join("\n")
             );
         }
     }

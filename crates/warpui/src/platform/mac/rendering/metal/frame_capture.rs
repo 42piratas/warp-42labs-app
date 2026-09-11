@@ -74,7 +74,8 @@ pub fn capture_frame(
 
 #[cfg(test)]
 pub(crate) fn convert_bgra_to_rgba(data: &mut [u8]) {
-    for chunk in data.chunks_exact_mut(4) {
+    let (pixels, _) = data.as_chunks_mut::<4>();
+    for chunk in pixels {
         chunk.swap(0, 2);
     }
 }

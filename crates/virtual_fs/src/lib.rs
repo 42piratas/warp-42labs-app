@@ -172,7 +172,7 @@ impl Warp {
             std::env::var("CARGO_TARGET_DIR")
                 .ok()
                 .map(|directory| PathBuf::from(directory).join(build))
-                .unwrap_or_else(|| Self::root().join(format!("target/{}", &build)))
+                .unwrap_or_else(|| Self::root().join(format!("target/{build}")))
         };
 
         path.push("warp");

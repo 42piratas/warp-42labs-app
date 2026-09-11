@@ -1,4 +1,6 @@
 use std::cmp::Ordering;
+use std::fs;
+use std::path::Path;
 
 use super::{compare_versions, plugin_manager_for};
 use crate::terminal::CLIAgent;
@@ -31,10 +33,30 @@ fn returns_manager_for_gemini() {
 
 #[test]
 fn returns_none_for_unsupported_agents() {
+    assert!(plugin_manager_for(CLIAgent::Grok).is_none());
     assert!(plugin_manager_for(CLIAgent::Amp).is_none());
     assert!(plugin_manager_for(CLIAgent::Droid).is_none());
     assert!(plugin_manager_for(CLIAgent::Copilot).is_none());
     assert!(plugin_manager_for(CLIAgent::Unknown).is_none());
+}
+
+#[test]
+fn grok_has_no_warp_managed_installer_docs() {
+    let repository_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let product = fs::read_to_string(repository_root.join("specs/GH11727/product.md"))
+        .expect("Grok product specification should exist");
+    let tech = fs::read_to_string(repository_root.join("specs/GH11727/tech.md"))
+        .expect("Grok technical specification should exist");
+
+    assert!(product.contains("does not write files into Grok’s configuration directories"));
+    assert!(tech.contains("`plugin_manager_for_with_shell(CLIAgent::Grok, …)` returns `None`"));
+    assert!(!product.contains("Enable Grok Build notifications"));
+    assert!(!tech.contains("### 5. Plugin manager"));
+    assert!(
+        !repository_root
+            .join("specs/GH11727/warp-hooks-sample.md")
+            .exists()
+    );
 }
 
 #[test]

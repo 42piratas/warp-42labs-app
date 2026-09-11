@@ -284,7 +284,7 @@ impl CommandRegistry {
                                     log::debug!(
                                         "Execution of `{}` failed with output: {}",
                                         command_to_run,
-                                        &output_string
+                                        output_string
                                     )
                                 }
                             }

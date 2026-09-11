@@ -475,9 +475,7 @@ impl TableStateHandle {
     /// and you want all columns to resize to fit their new content.
     pub fn invalidate_all_intrinsic_widths(&self) {
         let mut state = self.inner.borrow_mut();
-        for width in &mut state.intrinsic_column_widths {
-            *width = None;
-        }
+        state.intrinsic_column_widths.fill(None);
     }
 
     /// Scroll to a specific row with an optional offset.

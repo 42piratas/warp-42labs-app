@@ -549,7 +549,7 @@ impl CapturedFrame {
 
     pub fn ensure_rgba(&mut self) {
         if self.format == CapturedFrameFormat::Bgra {
-            for chunk in self.data.chunks_exact_mut(4) {
+            for chunk in self.data.as_chunks_mut::<4>().0 {
                 chunk.swap(0, 2);
             }
             self.format = CapturedFrameFormat::Rgba;

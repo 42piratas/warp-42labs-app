@@ -1670,7 +1670,7 @@ impl AppContext {
         // If there are no handlers registered for the given action, then we can return early
         // without needing to look at the responder chain at all, since no views will handle it
         let Some(mut handlers) = self.typed_actions.remove(&action_type) else {
-            log::warn!("Dispatched action has no handlers: {:?}", &action);
+            log::warn!("Dispatched action has no handlers: {:?}", action);
             return false;
         };
 
@@ -1739,7 +1739,7 @@ impl AppContext {
         arg: &dyn Any,
     ) {
         if let Some((name, mut handlers)) = self.global_actions.remove_entry(name) {
-            log::info!("dispatching global action for {}", &name);
+            log::info!("dispatching global action for {}", name);
             self.pending_flushes += 1;
             for handler in handlers.iter_mut().rev() {
                 handler(arg, location, self);
@@ -3740,7 +3740,7 @@ impl AppContext {
         if font_family_bytes.is_empty() {
             log::warn!(
                 "Failed to load any fonts for the family {}",
-                &fallback_family.name
+                fallback_family.name
             );
             return;
         }

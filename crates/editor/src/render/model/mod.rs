@@ -2839,10 +2839,7 @@ impl RenderState {
         } else {
             0
         };
-        loop {
-            let Some(item) = cursor.positioned_item() else {
-                break;
-            };
+        while let Some(item) = cursor.positioned_item() {
             if item.start_line != previous_line {
                 index_within_line = 0;
             } else {
@@ -3551,7 +3548,7 @@ impl RenderState {
 
         log::trace!(
             "Incoming block replacements {:?}",
-            &pending_edit.laid_out_line
+            pending_edit.laid_out_line
         );
 
         let hidden_range_clone = hidden_ranges.clone();
@@ -3701,7 +3698,7 @@ impl RenderState {
 
         for range in ranges {
             let hidden_range_size = range.end - range.start - 1;
-            log::trace!("==== Processing range: {:?} ====", &range);
+            log::trace!("==== Processing range: {:?} ====", range);
             new_tree.push_tree(cursor.slice(&range.start, SeekBias::Left));
             log::trace!("After pushing prefix tree:\n {}", new_tree.describe());
             let sub_tree = cursor.slice(&range.end, SeekBias::Right);
@@ -3846,9 +3843,13 @@ impl RenderState {
                 self.reveal_offset_in_table(*character_offset)
             }
             AutoScrollMode::ScrollToActiveSelections { .. } => {
-                self.selections().iter().fold(false, |changed, selection| {
-                    self.reveal_offset_in_table(selection.head) || changed
-                })
+                let mut changed = false;
+                for selection in self.selections().iter() {
+                    // Every selection may belong to a different table. Do not short-circuit
+                    // after the first scroll change: each table must receive its reveal update.
+                    changed |= self.reveal_offset_in_table(selection.head);
+                }
+                changed
             }
         }
     }
