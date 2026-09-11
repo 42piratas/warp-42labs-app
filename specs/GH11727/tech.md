@@ -1,6 +1,6 @@
 # TECH.md — First-class Grok Build agent support
 
-Issue: https://github.com/warpdotdev/warp/issues/11727  
+Issue: https://github.com/warpdotdev/warp/issues/11727
 Product spec: `specs/GH11727/product.md`
 
 ## Context
@@ -132,7 +132,7 @@ User runs `grok`
 | 12 Telemetry | Compile-time enum + From mapping |
 | 13 Serialization | Existing serde name helpers (variant `Grok`) |
 
-Presubmit: `./script/format` and clippy per CONTRIBUTING / AGENTS.md.  
+Presubmit: `./script/format` and clippy per CONTRIBUTING / AGENTS.md.
 Manual footer screenshot required on the PR; a recording is optional.
 
 ## Risks
