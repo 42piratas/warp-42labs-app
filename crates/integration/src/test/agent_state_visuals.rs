@@ -202,6 +202,31 @@ fn group_all_tabs() -> TestStep {
     )
 }
 
+fn set_test_group_collapsed(collapsed: bool) -> TestStep {
+    fast(
+        TestStep::new("Set agent-state group collapse state").with_action(
+            move |app, window_id, _| {
+                workspace_view(app, window_id).update(app, |workspace, ctx| {
+                    workspace.integration_test_set_group_collapsed(collapsed, ctx);
+                });
+            },
+        ),
+    )
+}
+
+fn assert_test_group_collapsed(expected: bool) -> AssertionCallback {
+    Box::new(move |app, window_id| {
+        let collapsed = workspace_view(app, window_id).read(app, |workspace, _| {
+            workspace.integration_test_group_collapsed()
+        });
+        async_assert_eq!(
+            collapsed,
+            Some(expected),
+            "test group collapse state should match"
+        )
+    })
+}
+
 pub fn test_agent_tab_styles_config_lifecycle() -> Builder {
     new_builder()
         .with_timeout(Duration::from_secs(5 * 60))
@@ -514,6 +539,15 @@ pub fn vertical_tabs_state_and_badge_matrix_warposs() -> Builder {
         .with_step(
             TestStep::new("Capture grouped Summary aggregation")
                 .with_take_screenshot("grouped_summary.png"),
+        )
+        .with_step(set_test_group_collapsed(true))
+        .with_step(
+            TestStep::new("Collapsed group state is retained in card mode")
+                .add_assertion(assert_test_group_collapsed(true)),
+        )
+        .with_step(
+            TestStep::new("Capture collapsed grouped card mode")
+                .with_take_screenshot("grouped_collapsed_card_mode.png"),
         )
         .with_step(
             TestStep::new("Verify routed states survive every render path")
