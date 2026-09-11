@@ -54,7 +54,9 @@ def hermes():
     hermes_bin = shutil.which("hermes")
     if hermes_bin:
         subprocess.run(
-            [hermes_bin, "plugins", "enable", "warp-42labs", "--no-allow-tool-override"], check=True
+            [hermes_bin, "plugins", "enable", "warp-42labs", "--no-allow-tool-override"],
+            check=True,
+            env=os.environ.copy(),
         )
 
 

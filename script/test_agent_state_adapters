@@ -249,16 +249,55 @@ def test_antigravity_installer_honors_warp_data_dir_override():
         assert not (home / ".warp-oss").exists()
 
 
-def test_installer_target_isolation_backup_byte_stability_and_all():
+def make_fake_hermes(bindir):
+    hermes = bindir / "hermes"
+    hermes.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, sys\n"
+        "from pathlib import Path\n"
+        "home = Path(os.environ['HERMES_HOME'])\n"
+        "marker = home / 'plugins/warp-42labs/enable-invocation.json'\n"
+        "marker.write_text(json.dumps({'argv': sys.argv[1:], 'hermes_home': str(home)}))\n"
+    )
+    hermes.chmod(0o755)
+
+
+def hermetic_installer_env(home, hermes_home, bindir):
+    return {
+        **os.environ,
+        "HOME": str(home),
+        "HERMES_HOME": str(hermes_home),
+        "WARP_DATA_DIR": str(home / "data"),
+        "PATH": f"{bindir}:{os.environ['PATH']}",
+    }
+
+
+def assert_hermes_enable_is_hermetic(home, hermes_home):
+    marker = hermes_home / "plugins/warp-42labs/enable-invocation.json"
+    assert json.loads(marker.read_text()) == {
+        "argv": ["plugins", "enable", "warp-42labs", "--no-allow-tool-override"],
+        "hermes_home": str(hermes_home),
+    }
+    assert not (home / ".hermes").exists()
+
+
+def test_hermes_enable_subprocess_explicitly_forwards_hermes_home():
+    installer = load_installer()
     with tempfile.TemporaryDirectory() as temp:
+        hermes_home = Path(temp) / "hermes-state"
+        with temporary_environ({"HERMES_HOME": str(hermes_home)}), \
+             unittest.mock.patch.object(installer.shutil, "which", return_value="hermes"), \
+             unittest.mock.patch.object(installer.subprocess, "run") as run:
+            installer.hermes()
+        assert run.call_args.kwargs["env"]["HERMES_HOME"] == str(hermes_home)
+
+
+def test_installer_target_isolation_backup_byte_stability_and_all():
+    with tempfile.TemporaryDirectory() as temp, tempfile.TemporaryDirectory() as bindir:
         home = Path(temp)
         hermes_home = home / "hermes-state"
-        env = {
-            **os.environ,
-            "HOME": str(home),
-            "HERMES_HOME": str(hermes_home),
-            "WARP_DATA_DIR": str(home / "data"),
-        }
+        make_fake_hermes(Path(bindir))
+        env = hermetic_installer_env(home, hermes_home, bindir)
         config = home / ".gemini/config/hooks.json"
         config.parent.mkdir(parents=True)
         original = {"user-hook": {"Stop": []}}
@@ -280,17 +319,13 @@ def test_installer_target_isolation_backup_byte_stability_and_all():
         install("--hermes", env)
         hermes_dir = hermes_home / "plugins/warp-42labs"
         assert (hermes_dir / "plugin.yaml").exists() and (hermes_dir / "__init__.py").exists()
-        assert not (home / ".hermes").exists()
+        assert_hermes_enable_is_hermetic(home, hermes_home)
 
-    with tempfile.TemporaryDirectory() as temp:
+    with tempfile.TemporaryDirectory() as temp, tempfile.TemporaryDirectory() as bindir:
         home = Path(temp)
         hermes_home = home / "hermes-state"
-        env = {
-            **os.environ,
-            "HOME": str(home),
-            "HERMES_HOME": str(hermes_home),
-            "WARP_DATA_DIR": str(home / "data"),
-        }
+        make_fake_hermes(Path(bindir))
+        env = hermetic_installer_env(home, hermes_home, bindir)
         install("--all", env)
         paths = [
             home / ".gemini/config/hooks.json",
@@ -302,7 +337,7 @@ def test_installer_target_isolation_backup_byte_stability_and_all():
         first = {path: path.read_bytes() for path in paths}
         install("--all", env)
         assert {path: path.read_bytes() for path in paths} == first
-        assert not (home / ".hermes").exists()
+        assert_hermes_enable_is_hermetic(home, hermes_home)
 
 
 def test_shipped_hermes_plugin_doctor():
@@ -319,6 +354,7 @@ def main():
     test_backup_preserves_each_distinct_rewrite_with_a_fixed_timestamp()
     test_antigravity_installer_uses_warposs_data_dir_by_default()
     test_antigravity_installer_honors_warp_data_dir_override()
+    test_hermes_enable_subprocess_explicitly_forwards_hermes_home()
     test_installer_target_isolation_backup_byte_stability_and_all()
     test_shipped_hermes_plugin_doctor()
     print("agent state adapter contracts: PASS")
