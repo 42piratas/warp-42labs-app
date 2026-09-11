@@ -17,6 +17,7 @@ use warpui::{App, EntityIdSet, Presenter, ReadModel, WindowInvalidation};
 
 use super::*;
 use crate::ActiveAgentViewsModel;
+use crate::PaneViewLocator;
 use crate::ai::agent::conversation::{AIConversation, ConversationStatus};
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
@@ -10399,6 +10400,46 @@ fn visible_bootstrap_block_leaves_focus_on_tab_rename_editor() {
                 .as_ref(ctx)
                 .active_session_view(ctx)
                 .expect("tab should contain a terminal");
+            (ctx.window_id(), terminal)
+        });
+        assert!(workspace.read(&app, |workspace, ctx| {
+            workspace.is_inline_rename_editor_focused(ctx)
+        }));
+        let focused_before = app.focused_view_id(window);
+
+        terminal.update(&mut app, |view, ctx| {
+            view.handle_terminal_event(&ModelEvent::VisibleBootstrapBlock, ctx);
+        });
+
+        assert_eq!(app.focused_view_id(window), focused_before);
+        assert!(workspace.read(&app, |workspace, ctx| {
+            workspace.is_inline_rename_editor_focused(ctx)
+        }));
+    });
+}
+
+#[test]
+fn visible_bootstrap_block_leaves_focus_on_pane_rename_editor() {
+    App::test((), |mut app| async move {
+        initialize_workspace_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        let (window, terminal) = workspace.update(&mut app, |workspace, ctx| {
+            let pane_group = workspace.active_tab_pane_group();
+            let pane_id = pane_group
+                .as_ref(ctx)
+                .pane_id_from_index(0)
+                .expect("active tab should contain a pane");
+            let terminal = pane_group
+                .as_ref(ctx)
+                .active_session_view(ctx)
+                .expect("active tab should contain a terminal");
+            workspace.rename_pane(
+                PaneViewLocator {
+                    pane_group_id: pane_group.id(),
+                    pane_id,
+                },
+                ctx,
+            );
             (ctx.window_id(), terminal)
         });
         assert!(workspace.read(&app, |workspace, ctx| {

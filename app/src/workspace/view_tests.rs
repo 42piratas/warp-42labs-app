@@ -5498,13 +5498,7 @@ mod simplified_wasm_tab_bar {
 
 /// Regression test for #14241.
 ///
-/// Creating a tab group opens the inline name editor and also spawns a terminal. About
-/// a second later that terminal's bootstrap block becomes visible and takes focus, which
-/// blurs the editor while the user is still typing. Blur used to be treated as
-/// confirmation, so whatever fragment had been typed became the group's name — and was
-/// persisted.
-///
-/// A rename the user never finished must not be committed.
+/// An interrupted tab-group rename must not persist an unfinished name.
 #[test]
 fn test_tab_group_rename_blur_does_not_commit_unfinished_name() {
     let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);

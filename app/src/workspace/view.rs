@@ -7512,6 +7512,9 @@ impl Workspace {
             Some(id) if id == self.tab_rename_editor.id() => {
                 self.current_workspace_state.is_tab_being_renamed()
             }
+            Some(id) if id == self.pane_rename_editor.id() => {
+                self.current_workspace_state.is_any_pane_being_renamed()
+            }
             Some(id) if id == self.tab_group_rename_editor.id() => self
                 .current_workspace_state
                 .is_any_tab_group_being_renamed(),
