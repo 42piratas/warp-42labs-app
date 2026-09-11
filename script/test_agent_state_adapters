@@ -1,41 +1,237 @@
 #!/usr/bin/env python3
-"""Contract tests for the repo-owned agent-state adapter executables."""
+"""End-to-end contracts for repo-owned CLI-agent state adapters."""
+import contextlib
+import importlib.util
 import json
 import os
+import shlex
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-ADAPTER = ROOT / "resources/agent_state_adapters"
+ADAPTER = ROOT / "resources" / "agent_state_adapters"
+OSC = "\033]777;notify;warp://cli-agent;"
+BEL = "\007"
+PROTOCOL_ENV = {"WARP_CLI_AGENT_PROTOCOL_VERSION": "1", "WARP_CLIENT_VERSION": "test"}
 
 
-def run(path, event, payload):
-    env = {**os.environ, "WARP_CLI_AGENT_PROTOCOL_VERSION": "1", "WARP_CLIENT_VERSION": "test", "ANTIGRAVITY_HOOK_EVENT": event}
-    return subprocess.run([str(path)], input=json.dumps(payload), text=True, capture_output=True, env=env, check=True)
+def parse_osc(data):
+    """Verify the OSC 777 envelope and return its protocol-v1 JSON payload."""
+    assert data.startswith(OSC) and data.endswith(BEL), repr(data)
+    payload = json.loads(data[len(OSC):-len(BEL)])
+    assert payload["v"] == 1
+    assert set(payload) == {"v", "agent", "event"}
+    return payload
+
+
+def run_hook_command(command, payload, path):
+    """Run an exact shipped Antigravity command with a pseudo-terminal."""
+    shell_command = f"printf '%s' {shlex.quote(json.dumps(payload))} | {command}"
+    return subprocess.run(
+        ["/usr/bin/script", "-q", "/dev/null", "/bin/sh", "-c", shell_command],
+        text=True,
+        capture_output=True,
+        env={**os.environ, **PROTOCOL_ENV, "PATH": f"{path}:{os.environ['PATH']}"},
+        timeout=5,
+        check=True,
+    )
+
+
+def antigravity_hooks():
+    hooks = json.loads((ADAPTER / "antigravity" / "hooks.json").read_text())
+    return hooks["warp-42labs-agent-state"]
+
+
+def assert_antigravity_hook(event, payload, expected_event=None, expected_stdout={}):
+    command = antigravity_hooks()[event][0]["command"]
+    with tempfile.TemporaryDirectory() as bindir:
+        binary = Path(bindir) / "warp-42labs-antigravity.py"
+        shutil.copy2(ADAPTER / "antigravity" / binary.name, binary)
+        binary.chmod(0o755)
+        result = run_hook_command(command, payload, bindir)
+    # macOS script emits this control sequence when its own stdin is not a TTY.
+    output = result.stdout.removeprefix("^D\b\b")
+    if expected_event is None:
+        stdout = output
+    else:
+        prefix, osc = output.split(OSC, 1)
+        assert prefix == ""
+        encoded_event, stdout = osc.split(BEL, 1)
+        assert parse_osc(OSC + encoded_event + BEL) == {"v": 1, "agent": "agy", "event": expected_event}
+    assert json.loads(stdout) == expected_stdout
+
+
+def test_antigravity_shipped_commands_and_recorded_payload_mapping():
+    # Execute commands from the shipped JSON exactly, not a reconstructed command.
+    assert_antigravity_hook("PreInvocation", {}, "prompt_submit")
+    assert_antigravity_hook("Stop", {"fullyIdle": True, "terminationReason": "model_stop"}, "stop")
+    for reason in ("error", "max_steps_exceeded", "cancelled", None):
+        payload = {"fullyIdle": True}
+        if reason is not None:
+            payload["terminationReason"] = reason
+        assert_antigravity_hook("Stop", payload, "stop_failure")
+    assert_antigravity_hook(
+        "Stop", {"fullyIdle": False}, None,
+        {"decision": "continue", "reason": "Background work is still active."},
+    )
+
+
+def run_pi_event(name, reason=None, env=PROTOCOL_ENV):
+    extension = ADAPTER / "pi" / "warp-42labs.ts"
+    driver = """
+const extension = (await import(process.argv[1])).default;
+const handlers = {};
+extension({ on: (name, handler) => { handlers[name] = handler; } });
+const name = process.argv[2];
+const reason = process.argv[3];
+const branch = reason === "missing" ? [] : reason ? [{ role: "assistant", stopReason: reason }] : [];
+handlers[name]?.(null, { sessionManager: { getBranch: () => branch } });
+"""
+    run_env = {**os.environ, **env}
+    for key in PROTOCOL_ENV:
+        if key not in env:
+            run_env.pop(key, None)
+    return subprocess.run(
+        ["bun", "-e", driver, str(extension), name, reason or ""],
+        text=True, capture_output=True, env=run_env, check=True,
+    ).stdout
+
+
+def test_pi_recorded_event_mapping_and_gating():
+    for name, expected in (
+        ("session_start", "session_start"), ("agent_start", "prompt_submit"),
+        ("ui_prompt_start", "permission_request"), ("ui_prompt_end", "permission_replied"),
+    ):
+        assert parse_osc(run_pi_event(name)) == {"v": 1, "agent": "pi", "event": expected}
+    for reason in ("stop", "length"):
+        assert parse_osc(run_pi_event("agent_settled", reason)) == {"v": 1, "agent": "pi", "event": "stop"}
+    assert parse_osc(run_pi_event("agent_settled", "error")) == {"v": 1, "agent": "pi", "event": "stop_failure"}
+    for reason in ("aborted", "deferred", "pending", "toolUse", "unknown", "missing"):
+        assert run_pi_event("agent_settled", reason) == ""
+    assert run_pi_event("agent_end", "stop") == ""
+    for env in ({}, {"WARP_CLI_AGENT_PROTOCOL_VERSION": "2", "WARP_CLIENT_VERSION": "test"}, {"WARP_CLI_AGENT_PROTOCOL_VERSION": "1"}):
+        assert run_pi_event("agent_start", env=env) == ""
+
+
+@contextlib.contextmanager
+def temporary_environ(updates):
+    previous = {key: os.environ.get(key) for key in updates}
+    for key, value in updates.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+    try:
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def capture_hermes(callback, env=PROTOCOL_ENV, *args, **kwargs):
+    read_fd, write_fd = os.pipe()
+    saved = os.dup(1)
+    environment = {key: env.get(key) for key in PROTOCOL_ENV}
+    environment.update(env)
+    try:
+        os.dup2(write_fd, 1)
+        with temporary_environ(environment):
+            callback(*args, **kwargs)
+    finally:
+        os.dup2(saved, 1)
+        os.close(saved)
+        os.close(write_fd)
+    result = os.read(read_fd, 4096).decode()
+    os.close(read_fd)
+    return result
+
+
+def test_hermes_callbacks_privacy_api_error_omission_and_gating():
+    path = ADAPTER / "hermes" / "__init__.py"
+    spec = importlib.util.spec_from_file_location("warp_42labs_hermes", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    secret = "do-not-leak-secret-prompt"
+    for callback, expected in (
+        (module.pre_llm_call, "prompt_submit"), (module.post_llm_call, "stop"),
+        (module.pre_approval_request, "permission_request"), (module.post_approval_response, "permission_replied"),
+    ):
+        output = capture_hermes(callback, PROTOCOL_ENV, prompt=secret, response=secret, error=secret)
+        assert secret not in output
+        assert parse_osc(output) == {"v": 1, "agent": "hermes", "event": expected}
+    for env in ({}, {"WARP_CLI_AGENT_PROTOCOL_VERSION": "2", "WARP_CLIENT_VERSION": "test"}, {"WARP_CLI_AGENT_PROTOCOL_VERSION": "1"}):
+        assert capture_hermes(module.pre_llm_call, env, prompt=secret) == ""
+
+    registered = {}
+    module.register(type("Context", (), {"register_hook": lambda _, name, callback: registered.setdefault(name, callback)})())
+    assert set(registered) == {"pre_llm_call", "post_llm_call", "pre_approval_request", "post_approval_response"}
+    assert "api_request_error" not in registered
+
+
+def install(args, env):
+    subprocess.run([str(ROOT / "script" / "install_agent_state_adapters"), args], env=env, check=True)
+
+
+def test_installer_target_isolation_backup_byte_stability_and_all():
+    with tempfile.TemporaryDirectory() as temp:
+        home = Path(temp)
+        env = {**os.environ, "HOME": str(home), "WARP_DATA_DIR": str(home / "data")}
+        config = home / ".gemini/config/hooks.json"
+        config.parent.mkdir(parents=True)
+        original = {"user-hook": {"Stop": []}}
+        config.write_text(json.dumps(original) + "\n")
+
+        install("--antigravity", env)
+        assert json.loads(config.read_text())["user-hook"] == original["user-hook"]
+        assert not (home / ".pi").exists() and not (home / ".hermes").exists()
+        backups = list(config.parent.glob("hooks.json.bak.*"))
+        assert len(backups) == 1 and json.loads(backups[0].read_text()) == original
+        antigravity_bytes = config.read_bytes()
+        install("--antigravity", env)
+        assert config.read_bytes() == antigravity_bytes
+        assert len(list(config.parent.glob("hooks.json.bak.*"))) == 1
+
+        install("--pi", env)
+        pi_path = home / ".pi/agent/extensions/warp-42labs.ts"
+        assert pi_path.exists() and not (home / ".hermes").exists()
+        install("--hermes", env)
+        hermes_dir = home / ".hermes/plugins/warp-42labs"
+        assert (hermes_dir / "plugin.yaml").exists() and (hermes_dir / "__init__.py").exists()
+
+    with tempfile.TemporaryDirectory() as temp:
+        home = Path(temp)
+        env = {**os.environ, "HOME": str(home), "WARP_DATA_DIR": str(home / "data")}
+        install("--all", env)
+        paths = [
+            home / ".gemini/config/hooks.json",
+            home / "data/agent_state_adapters/warp-42labs-antigravity.py",
+            home / ".pi/agent/extensions/warp-42labs.ts",
+            home / ".hermes/plugins/warp-42labs/plugin.yaml",
+            home / ".hermes/plugins/warp-42labs/__init__.py",
+        ]
+        first = {path: path.read_bytes() for path in paths}
+        install("--all", env)
+        assert {path: path.read_bytes() for path in paths} == first
+
+
+def test_shipped_hermes_plugin_doctor():
+    subprocess.run(
+        ["hermes", "plugins", "doctor", str(ADAPTER / "hermes"), "--ci"],
+        text=True, capture_output=True, check=True,
+    )
 
 
 def main():
-    agy = ADAPTER / "antigravity/warp-42labs-antigravity.py"
-    assert json.loads(run(agy, "PreInvocation", {}).stdout) == {}
-    assert json.loads(run(agy, "Stop", {"fullyIdle": False}).stdout)["decision"] == "continue"
-    assert json.loads(run(agy, "Stop", {"fullyIdle": True, "terminationReason": "model_stop"}).stdout) == {}
-    assert json.loads(run(agy, "Stop", {"fullyIdle": True, "terminationReason": "error"}).stdout) == {}
-    hermes = ADAPTER / "hermes/__init__.py"
-    code = "import sys; sys.path.insert(0, sys.argv[1]); import __init__ as p; p.pre_llm_call()"
-    result = subprocess.run(["python3", "-c", code, str(hermes.parent)], capture_output=True, text=True,
-                            env={**os.environ, "WARP_CLI_AGENT_PROTOCOL_VERSION": "1", "WARP_CLIENT_VERSION": "test"}, check=True)
-    assert "prompt_submit" in result.stdout
-    with tempfile.TemporaryDirectory() as home:
-        env = {**os.environ, "HOME": home, "WARP_DATA_DIR": str(Path(home) / "data")}
-        subprocess.run([str(ROOT / "script/install_agent_state_adapters"), "--antigravity"], env=env, check=True)
-        first = (Path(home) / ".gemini/config/hooks.json").read_bytes()
-        hook = json.loads(first)["warp-42labs-agent-state"]["PreInvocation"][0]["command"]
-        assert "ANTIGRAVITY_HOOK_EVENT=PreInvocation" in hook
-        assert json.loads(subprocess.run(["/bin/sh", "-c", hook], input="{}", text=True, capture_output=True,
-                                         env={**env, "WARP_CLI_AGENT_PROTOCOL_VERSION": "1", "WARP_CLIENT_VERSION": "test"}, check=True).stdout) == {}
-        subprocess.run([str(ROOT / "script/install_agent_state_adapters"), "--antigravity"], env=env, check=True)
-        assert first == (Path(home) / ".gemini/config/hooks.json").read_bytes()
+    test_antigravity_shipped_commands_and_recorded_payload_mapping()
+    test_pi_recorded_event_mapping_and_gating()
+    test_hermes_callbacks_privacy_api_error_omission_and_gating()
+    test_installer_target_isolation_backup_byte_stability_and_all()
+    test_shipped_hermes_plugin_doctor()
     print("agent state adapter contracts: PASS")
 
 
