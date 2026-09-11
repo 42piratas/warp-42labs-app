@@ -1,6 +1,6 @@
 use super::*;
 use crate::terminal::cli_agent_sessions::event::{
-    CLI_AGENT_NOTIFICATION_SENTINEL, CLIAgentEventSource, CLIAgentEventType,
+    CLI_AGENT_NOTIFICATION_SENTINEL, CLIAgentEventSource, CLIAgentEventType, parse_event,
 };
 
 #[test]
@@ -214,6 +214,42 @@ fn repo_owned_adapters_are_supported_by_default_listener() {
     assert!(is_agent_supported(&CLIAgent::Hermes));
     assert!(create_handler(&CLIAgent::Antigravity).is_some());
     assert!(create_handler(&CLIAgent::Hermes).is_some());
+}
+
+#[test]
+fn repo_owned_adapter_payloads_parse_and_default_listener_forwards_them() {
+    // These are the minimal protocol-v1 bodies emitted by our Antigravity,
+    // Pi, and Hermes adapters. Keep them content-free: adapters deliberately
+    // send state only, never prompts, responses, or tool input.
+    for (body, agent, event_type) in [
+        (
+            r#"{"v":1,"agent":"agy","event":"prompt_submit"}"#,
+            CLIAgent::Antigravity,
+            CLIAgentEventType::PromptSubmit,
+        ),
+        (
+            r#"{"v":1,"agent":"pi","event":"stop"}"#,
+            CLIAgent::Pi,
+            CLIAgentEventType::Stop,
+        ),
+        (
+            r#"{"v":1,"agent":"hermes","event":"permission_replied"}"#,
+            CLIAgent::Hermes,
+            CLIAgentEventType::PermissionReplied,
+        ),
+    ] {
+        let parsed = parse_event(Some(CLI_AGENT_NOTIFICATION_SENTINEL), body)
+            .expect("adapter payload must be accepted by Warp's protocol parser");
+        assert_eq!(parsed.agent, agent);
+        assert_eq!(parsed.event, event_type);
+
+        let mut listener = DefaultSessionListener;
+        let forwarded = listener
+            .handle_event(parsed)
+            .expect("default listener must forward non-session_start events");
+        assert_eq!(forwarded.agent, agent);
+        assert_eq!(forwarded.event, event_type);
+    }
 }
 
 #[test]

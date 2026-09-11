@@ -26,14 +26,18 @@ def parse_osc(data):
     return payload
 
 
-def run_hook_command(command, payload, path):
+def run_hook_command(command, payload, path, env=PROTOCOL_ENV):
     """Run an exact shipped Antigravity command with a pseudo-terminal."""
     shell_command = f"printf '%s' {shlex.quote(json.dumps(payload))} | {command}"
+    run_env = {**os.environ, **env, "PATH": f"{path}:{os.environ['PATH']}"}
+    for key in PROTOCOL_ENV:
+        if key not in env:
+            run_env.pop(key, None)
     return subprocess.run(
         ["/usr/bin/script", "-q", "/dev/null", "/bin/sh", "-c", shell_command],
         text=True,
         capture_output=True,
-        env={**os.environ, **PROTOCOL_ENV, "PATH": f"{path}:{os.environ['PATH']}"},
+        env=run_env,
         timeout=5,
         check=True,
     )
@@ -44,13 +48,15 @@ def antigravity_hooks():
     return hooks["warp-42labs-agent-state"]
 
 
-def assert_antigravity_hook(event, payload, expected_event=None, expected_stdout={}):
+def assert_antigravity_hook(event, payload, expected_event=None, expected_stdout=None, env=PROTOCOL_ENV):
+    if expected_stdout is None:
+        expected_stdout = {}
     command = antigravity_hooks()[event][0]["command"]
     with tempfile.TemporaryDirectory() as bindir:
         binary = Path(bindir) / "warp-42labs-antigravity.py"
         shutil.copy2(ADAPTER / "antigravity" / binary.name, binary)
         binary.chmod(0o755)
-        result = run_hook_command(command, payload, bindir)
+        result = run_hook_command(command, payload, bindir, env)
     # macOS script emits this control sequence when its own stdin is not a TTY.
     output = result.stdout.removeprefix("^D\b\b")
     if expected_event is None:
@@ -76,6 +82,14 @@ def test_antigravity_shipped_commands_and_recorded_payload_mapping():
         "Stop", {"fullyIdle": False}, None,
         {"decision": "continue", "reason": "Background work is still active."},
     )
+    for env in (
+        {},
+        {"WARP_CLI_AGENT_PROTOCOL_VERSION": "2", "WARP_CLIENT_VERSION": "test"},
+        {"WARP_CLI_AGENT_PROTOCOL_VERSION": "1"},
+    ):
+        # Hook stdout remains valid JSON while the adapter suppresses OSC without
+        # a compatible Warp client and protocol environment.
+        assert_antigravity_hook("PreInvocation", {}, env=env)
 
 
 def run_pi_event(name, reason=None, env=PROTOCOL_ENV):
