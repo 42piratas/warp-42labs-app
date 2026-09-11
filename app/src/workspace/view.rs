@@ -5374,6 +5374,31 @@ impl Workspace {
         ctx.notify();
     }
 
+    #[cfg(feature = "integration_tests")]
+    pub fn integration_test_set_group_collapsed(
+        &mut self,
+        collapsed: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(group_id) = self.tabs.first().and_then(|tab| tab.group_id) else {
+            return;
+        };
+        let Some(group) = self.tab_groups.get_mut(&group_id) else {
+            return;
+        };
+        group.collapsed = collapsed;
+        ctx.notify();
+    }
+
+    #[cfg(feature = "integration_tests")]
+    pub fn integration_test_group_collapsed(&self) -> Option<bool> {
+        self.tabs
+            .first()
+            .and_then(|tab| tab.group_id)
+            .and_then(|group_id| self.tab_groups.get(&group_id))
+            .map(|group| group.collapsed)
+    }
+
     /// Finds the pane containing a terminal viewing the given ambient agent conversation,
     /// returning None if the ambient conversation is not open in any tab.
     fn find_pane_with_ambient_agent_conversation(
