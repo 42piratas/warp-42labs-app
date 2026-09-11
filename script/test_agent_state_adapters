@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """End-to-end contracts for repo-owned CLI-agent state adapters."""
 import contextlib
+import importlib.machinery
 import importlib.util
 import json
 import os
@@ -8,6 +9,7 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+import unittest.mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -191,10 +193,48 @@ def install(args, env):
     subprocess.run([str(ROOT / "script" / "install_agent_state_adapters"), args], env=env, check=True)
 
 
+def load_installer():
+    path = ROOT / "script" / "install_agent_state_adapters"
+    spec = importlib.util.spec_from_loader(
+        "install_agent_state_adapters",
+        importlib.machinery.SourceFileLoader("install_agent_state_adapters", str(path)),
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_backup_preserves_each_distinct_rewrite_with_a_fixed_timestamp():
+    installer = load_installer()
+    fixed_time = installer.datetime.datetime(2026, 9, 10, 21, 0, 0)
+    with tempfile.TemporaryDirectory() as temp:
+        config = Path(temp) / "hooks.json"
+        config.write_text("first prior config\n")
+        with unittest.mock.patch.object(
+            installer.datetime, "datetime", wraps=installer.datetime.datetime
+        ) as clock:
+            clock.now.return_value = fixed_time
+            installer.backup(config)
+            config.write_text("second prior config\n")
+            installer.backup(config)
+        backups = sorted(config.parent.glob("hooks.json.bak.*"))
+        assert len(backups) == 2
+        assert {backup.read_text() for backup in backups} == {
+            "first prior config\n",
+            "second prior config\n",
+        }
+
+
 def test_installer_target_isolation_backup_byte_stability_and_all():
     with tempfile.TemporaryDirectory() as temp:
         home = Path(temp)
-        env = {**os.environ, "HOME": str(home), "WARP_DATA_DIR": str(home / "data")}
+        hermes_home = home / "hermes-state"
+        env = {
+            **os.environ,
+            "HOME": str(home),
+            "HERMES_HOME": str(hermes_home),
+            "WARP_DATA_DIR": str(home / "data"),
+        }
         config = home / ".gemini/config/hooks.json"
         config.parent.mkdir(parents=True)
         original = {"user-hook": {"Stop": []}}
@@ -214,23 +254,31 @@ def test_installer_target_isolation_backup_byte_stability_and_all():
         pi_path = home / ".pi/agent/extensions/warp-42labs.ts"
         assert pi_path.exists() and not (home / ".hermes").exists()
         install("--hermes", env)
-        hermes_dir = home / ".hermes/plugins/warp-42labs"
+        hermes_dir = hermes_home / "plugins/warp-42labs"
         assert (hermes_dir / "plugin.yaml").exists() and (hermes_dir / "__init__.py").exists()
+        assert not (home / ".hermes").exists()
 
     with tempfile.TemporaryDirectory() as temp:
         home = Path(temp)
-        env = {**os.environ, "HOME": str(home), "WARP_DATA_DIR": str(home / "data")}
+        hermes_home = home / "hermes-state"
+        env = {
+            **os.environ,
+            "HOME": str(home),
+            "HERMES_HOME": str(hermes_home),
+            "WARP_DATA_DIR": str(home / "data"),
+        }
         install("--all", env)
         paths = [
             home / ".gemini/config/hooks.json",
             home / "data/agent_state_adapters/warp-42labs-antigravity.py",
             home / ".pi/agent/extensions/warp-42labs.ts",
-            home / ".hermes/plugins/warp-42labs/plugin.yaml",
-            home / ".hermes/plugins/warp-42labs/__init__.py",
+            hermes_home / "plugins/warp-42labs/plugin.yaml",
+            hermes_home / "plugins/warp-42labs/__init__.py",
         ]
         first = {path: path.read_bytes() for path in paths}
         install("--all", env)
         assert {path: path.read_bytes() for path in paths} == first
+        assert not (home / ".hermes").exists()
 
 
 def test_shipped_hermes_plugin_doctor():
@@ -244,6 +292,7 @@ def main():
     test_antigravity_shipped_commands_and_recorded_payload_mapping()
     test_pi_recorded_event_mapping_and_gating()
     test_hermes_callbacks_privacy_api_error_omission_and_gating()
+    test_backup_preserves_each_distinct_rewrite_with_a_fixed_timestamp()
     test_installer_target_isolation_backup_byte_stability_and_all()
     test_shipped_hermes_plugin_doctor()
     print("agent state adapter contracts: PASS")
