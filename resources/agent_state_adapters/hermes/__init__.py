@@ -1,14 +1,18 @@
 """Hermes hooks for Warp's protocol-v1 CLI-agent notifications."""
 import json
 import os
-import sys
 
 
 def _emit(event):
     if os.environ.get("WARP_CLI_AGENT_PROTOCOL_VERSION") != "1" or not os.environ.get("WARP_CLIENT_VERSION"):
         return
-    sys.stdout.write("\033]777;notify;warp://cli-agent;" + json.dumps({"v": 1, "agent": "hermes", "event": event}, separators=(",", ":")) + "\007")
-    sys.stdout.flush()
+    payload = "\033]777;notify;warp://cli-agent;" + json.dumps(
+        {"v": 1, "agent": "hermes", "event": event}, separators=(",", ":")
+    ) + "\007"
+    try:
+        os.write(2, payload.encode())
+    except OSError:
+        pass
 
 
 def pre_llm_call(*args, **kwargs):

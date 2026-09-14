@@ -3,6 +3,7 @@
 import contextlib
 import importlib.machinery
 import importlib.util
+import io
 import json
 import os
 import shlex
@@ -248,15 +249,15 @@ def temporary_environ(updates):
 
 def capture_hermes(callback, env=PROTOCOL_ENV, *args, **kwargs):
     read_fd, write_fd = os.pipe()
-    saved = os.dup(1)
+    saved = os.dup(2)
     environment = {key: env.get(key) for key in PROTOCOL_ENV}
     environment.update(env)
     try:
-        os.dup2(write_fd, 1)
+        os.dup2(write_fd, 2)
         with temporary_environ(environment):
             callback(*args, **kwargs)
     finally:
-        os.dup2(saved, 1)
+        os.dup2(saved, 2)
         os.close(saved)
         os.close(write_fd)
     result = os.read(read_fd, 4096).decode()
@@ -292,6 +293,14 @@ def test_hermes_callbacks_privacy_api_error_omission_and_gating():
     }
     assert parse_osc(capture_hermes(module.on_session_end, PROTOCOL_ENV, failed=True, payload=secret)) == {
         "v": 1, "agent": "hermes", "event": "stop_failure",
+    }
+
+    def redirected_oneshot_callback():
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            module.on_session_end(failed=False)
+
+    assert parse_osc(capture_hermes(redirected_oneshot_callback)) == {
+        "v": 1, "agent": "hermes", "event": "stop",
     }
     for env in ({}, {"WARP_CLI_AGENT_PROTOCOL_VERSION": "2", "WARP_CLIENT_VERSION": "test"}, {"WARP_CLI_AGENT_PROTOCOL_VERSION": "1"}):
         assert capture_hermes(module.pre_llm_call, env, prompt=secret) == ""
