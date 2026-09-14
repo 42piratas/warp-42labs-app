@@ -15,8 +15,12 @@ def pre_llm_call(*args, **kwargs):
     _emit("prompt_submit")
 
 
-def post_llm_call(*args, **kwargs):
-    _emit("stop")
+def on_session_start(**kwargs):
+    _emit("session_start")
+
+
+def on_session_end(**kwargs):
+    _emit("stop_failure" if kwargs.get("failed") else "stop")
 
 
 def pre_approval_request(*args, **kwargs):
@@ -29,7 +33,8 @@ def post_approval_response(*args, **kwargs):
 
 def register(ctx):
     """Register only lifecycle observers; payloads are intentionally ignored."""
+    ctx.register_hook("on_session_start", on_session_start)
     ctx.register_hook("pre_llm_call", pre_llm_call)
-    ctx.register_hook("post_llm_call", post_llm_call)
+    ctx.register_hook("on_session_end", on_session_end)
     ctx.register_hook("pre_approval_request", pre_approval_request)
     ctx.register_hook("post_approval_response", post_approval_response)

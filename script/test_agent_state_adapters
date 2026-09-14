@@ -17,6 +17,7 @@ ADAPTER = ROOT / "resources" / "agent_state_adapters"
 OSC = "\033]777;notify;warp://cli-agent;"
 BEL = "\007"
 PROTOCOL_ENV = {"WARP_CLI_AGENT_PROTOCOL_VERSION": "1", "WARP_CLIENT_VERSION": "test"}
+PRIVACY_SENTINEL = "do-not-leak-secret-prompt"
 
 
 def parse_osc(data):
@@ -24,7 +25,7 @@ def parse_osc(data):
     assert data.startswith(OSC) and data.endswith(BEL), repr(data)
     payload = json.loads(data[len(OSC):-len(BEL)])
     assert payload["v"] == 1
-    assert set(payload) == {"v", "agent", "event"}
+    assert {"v", "agent", "event"} <= set(payload) <= {"v", "agent", "event", "query", "response"}
     return payload
 
 
@@ -61,6 +62,7 @@ def assert_antigravity_hook(event, payload, expected_event=None, expected_stdout
         result = run_hook_command(command, payload, bindir, env)
     # macOS script emits this control sequence when its own stdin is not a TTY.
     output = result.stdout.removeprefix("^D\b\b")
+    assert PRIVACY_SENTINEL not in output
     if expected_event is None:
         stdout = output
     else:
@@ -73,13 +75,28 @@ def assert_antigravity_hook(event, payload, expected_event=None, expected_stdout
 
 def test_antigravity_shipped_commands_and_recorded_payload_mapping():
     # Execute commands from the shipped JSON exactly, not a reconstructed command.
-    assert_antigravity_hook("PreInvocation", {}, "prompt_submit")
-    assert_antigravity_hook("Stop", {"fullyIdle": True, "terminationReason": "model_stop"}, "stop")
-    for reason in ("error", "max_steps_exceeded", "cancelled", None):
+    assert_antigravity_hook("PreInvocation", {"unused": PRIVACY_SENTINEL}, "prompt_submit")
+    for reason in (
+        "NO_TOOL_CALL", "TERMINAL_STEP_TYPE", "TERMINAL_CUSTOM_HOOK", "INJECTED_RESPONSE",
+        "EARLY_CONTINUE", "USER_CANCELED", "UNSPECIFIED", "model_stop",
+    ):
+        for value in (reason, reason.lower()):
+            assert_antigravity_hook("Stop", {"fullyIdle": True, "terminationReason": value}, "stop")
+    for reason in ("unrecognised", None, ""):
         payload = {"fullyIdle": True}
         if reason is not None:
             payload["terminationReason"] = reason
-        assert_antigravity_hook("Stop", payload, "stop_failure")
+        assert_antigravity_hook("Stop", payload, "stop")
+    for reason in (
+        "ERROR", "HALTED_STEP", "MAX_INVOCATIONS", "MAX_FORCED_INVOCATIONS",
+        "MAX_TOKEN_BUDGET_EXCEEDED", "MAX_STEPS_EXCEEDED",
+    ):
+        for value in (reason, reason.lower()):
+            assert_antigravity_hook("Stop", {"fullyIdle": True, "terminationReason": value}, "stop_failure")
+    assert_antigravity_hook(
+        "Stop", {"fullyIdle": True, "terminationReason": "NO_TOOL_CALL", "error": "do-not-leak-secret-prompt"},
+        "stop_failure",
+    )
     assert_antigravity_hook(
         "Stop", {"fullyIdle": False}, None,
         {"decision": "continue", "reason": "Background work is still active."},
@@ -94,25 +111,42 @@ def test_antigravity_shipped_commands_and_recorded_payload_mapping():
         assert_antigravity_hook("PreInvocation", {}, env=env)
 
 
-def run_pi_event(name, reason=None, env=PROTOCOL_ENV):
+def pi_entry(role, content="", stop_reason=None):
+    if role == "assistant" and isinstance(content, str):
+        content = [{"type": "text", "text": content}] if content else []
+    message = {"role": role, "content": content}
+    if stop_reason is not None:
+        message["stopReason"] = stop_reason
+    return {
+        "type": "message",
+        "id": f"{role}-id",
+        "parentId": None,
+        "timestamp": "2026-09-13T00:00:00.000Z",
+        "message": message,
+    }
+
+
+def run_pi_event(name, branch=None, env=PROTOCOL_ENV):
     extension = ADAPTER / "pi" / "warp-42labs.ts"
     driver = """
 const extension = (await import(process.argv[1])).default;
 const handlers = {};
 extension({ on: (name, handler) => { handlers[name] = handler; } });
 const name = process.argv[2];
-const reason = process.argv[3];
-const branch = reason === "missing" ? [] : reason ? [{ role: "assistant", stopReason: reason }] : [];
-handlers[name]?.(null, { sessionManager: { getBranch: () => branch } });
+const branch = JSON.parse(process.argv[3]);
+const event = JSON.parse(process.argv[4]);
+handlers[name]?.(event, { sessionManager: { getBranch: () => branch } });
 """
     run_env = {**os.environ, **env}
     for key in PROTOCOL_ENV:
         if key not in env:
             run_env.pop(key, None)
-    return subprocess.run(
-        ["bun", "-e", driver, str(extension), name, reason or ""],
+    output = subprocess.run(
+        ["bun", "-e", driver, str(extension), name, json.dumps(branch or []), json.dumps({"unused": PRIVACY_SENTINEL})],
         text=True, capture_output=True, env=run_env, check=True,
     ).stdout
+    assert PRIVACY_SENTINEL not in output
+    return output
 
 
 def test_pi_recorded_event_mapping_and_gating():
@@ -121,12 +155,75 @@ def test_pi_recorded_event_mapping_and_gating():
         ("ui_prompt_start", "permission_request"), ("ui_prompt_end", "permission_replied"),
     ):
         assert parse_osc(run_pi_event(name)) == {"v": 1, "agent": "pi", "event": expected}
-    for reason in ("stop", "length"):
-        assert parse_osc(run_pi_event("agent_settled", reason)) == {"v": 1, "agent": "pi", "event": "stop"}
-    assert parse_osc(run_pi_event("agent_settled", "error")) == {"v": 1, "agent": "pi", "event": "stop_failure"}
-    for reason in ("aborted", "deferred", "pending", "toolUse", "unknown", "missing"):
-        assert run_pi_event("agent_settled", reason) == ""
-    assert run_pi_event("agent_end", "stop") == ""
+
+    for reason in ("stop", "length", "aborted"):
+        branch = [pi_entry("user", "question"), pi_entry("assistant", "answer", reason)]
+        assert parse_osc(run_pi_event("agent_settled", branch)) == {
+            "v": 1, "agent": "pi", "event": "stop", "query": "question", "response": "answer",
+        }
+    branch = [pi_entry("user", "question"), pi_entry("assistant", "answer", "error")]
+    assert parse_osc(run_pi_event("agent_settled", branch)) == {
+        "v": 1, "agent": "pi", "event": "stop_failure", "query": "question", "response": "answer",
+    }
+    skill = (
+        '<skill name="deploy" location="/absolute/path/that-must-not-leak">\n'
+        f"{PRIVACY_SENTINEL}\n</skill>\n\n--dry-run"
+    )
+    output = run_pi_event("agent_settled", [pi_entry("user", skill), pi_entry("assistant", "answer", "stop")])
+    assert PRIVACY_SENTINEL not in output
+    assert parse_osc(output) == {
+        "v": 1, "agent": "pi", "event": "stop", "query": "/skill:deploy --dry-run", "response": "answer",
+    }
+    long_text = "x" * 201
+    assert parse_osc(run_pi_event("agent_settled", [
+        pi_entry("user", long_text), pi_entry("assistant", long_text, "stop"),
+    ])) == {
+        "v": 1, "agent": "pi", "event": "stop", "query": "x" * 197 + "...", "response": "x" * 197 + "...",
+    }
+    astral_text = "x" * 196 + "😀" + "y" * 4
+    assert parse_osc(run_pi_event("agent_settled", [
+        pi_entry("user", astral_text), pi_entry("assistant", astral_text, "stop"),
+    ])) == {
+        "v": 1, "agent": "pi", "event": "stop", "query": "x" * 196 + "😀...", "response": "x" * 196 + "😀...",
+    }
+    for reason in ("deferred", "pending", "toolUse", "unknown", None):
+        assert run_pi_event("agent_settled", [pi_entry("assistant", "answer", reason)]) == ""
+    assert run_pi_event("agent_settled", []) == ""
+    assert parse_osc(run_pi_event("agent_settled", [
+        pi_entry("assistant", "answer", "stop"), {"type": "custom", "message": {"role": "assistant"}},
+    ])) == {"v": 1, "agent": "pi", "event": "stop", "response": "answer"}
+    assert parse_osc(run_pi_event("agent_settled", [pi_entry("assistant", "answer", "stop")])) == {
+        "v": 1, "agent": "pi", "event": "stop", "response": "answer",
+    }
+    assert parse_osc(run_pi_event("agent_settled", [pi_entry("user", "question"), pi_entry("assistant", "", "stop")])) == {
+        "v": 1, "agent": "pi", "event": "stop", "query": "question",
+    }
+    assert parse_osc(run_pi_event("agent_settled", [
+        pi_entry("user", "old question"), pi_entry("assistant", "old answer", "stop"),
+        pi_entry("user", "current question"), pi_entry("assistant", "", "error"),
+    ])) == {"v": 1, "agent": "pi", "event": "stop_failure", "query": "current question"}
+    assert parse_osc(run_pi_event("agent_settled", [
+        pi_entry("user", "old question"), pi_entry("assistant", "old answer", "stop"),
+        pi_entry("user", [{"type": "image", "data": "ignored"}]), pi_entry("assistant", "current answer", "stop"),
+    ])) == {"v": 1, "agent": "pi", "event": "stop", "response": "current answer"}
+    assert parse_osc(run_pi_event("agent_settled", [
+        pi_entry("user", "old question"), pi_entry("assistant", "old answer", "stop"),
+        pi_entry("assistant", "current answer", "stop"),
+    ])) == {"v": 1, "agent": "pi", "event": "stop", "response": "current answer"}
+    assert parse_osc(run_pi_event("agent_settled", [
+        pi_entry("user", "question"), pi_entry("assistant", "", "toolUse"),
+        pi_entry("toolResult", "tool output"), pi_entry("assistant", "answer", "stop"),
+    ])) == {
+        "v": 1, "agent": "pi", "event": "stop", "query": "question", "response": "answer",
+    }
+    assert parse_osc(run_pi_event("agent_settled", [
+        pi_entry("user", "question"), pi_entry("assistant", "retry", "error"),
+        pi_entry("assistant", "", "toolUse"), pi_entry("toolResult", "tool output"),
+        pi_entry("assistant", "answer", "stop"),
+    ])) == {
+        "v": 1, "agent": "pi", "event": "stop", "query": "question", "response": "answer",
+    }
+    assert run_pi_event("agent_end", [pi_entry("assistant", "answer", "stop")]) == ""
     for env in ({}, {"WARP_CLI_AGENT_PROTOCOL_VERSION": "2", "WARP_CLIENT_VERSION": "test"}, {"WARP_CLI_AGENT_PROTOCOL_VERSION": "1"}):
         assert run_pi_event("agent_start", env=env) == ""
 
@@ -167,26 +264,45 @@ def capture_hermes(callback, env=PROTOCOL_ENV, *args, **kwargs):
     return result
 
 
+def hermes_declared_hooks():
+    lines = (ADAPTER / "hermes" / "plugin.yaml").read_text().splitlines()
+    start = lines.index("provides_hooks:") + 1
+    return {
+        line.strip().removeprefix("- ")
+        for line in lines[start:]
+        if line.startswith("  - ")
+    }
+
+
 def test_hermes_callbacks_privacy_api_error_omission_and_gating():
     path = ADAPTER / "hermes" / "__init__.py"
     spec = importlib.util.spec_from_file_location("warp_42labs_hermes", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    secret = "do-not-leak-secret-prompt"
+    secret = PRIVACY_SENTINEL
     for callback, expected in (
-        (module.pre_llm_call, "prompt_submit"), (module.post_llm_call, "stop"),
+        (module.on_session_start, "session_start"), (module.pre_llm_call, "prompt_submit"),
         (module.pre_approval_request, "permission_request"), (module.post_approval_response, "permission_replied"),
     ):
         output = capture_hermes(callback, PROTOCOL_ENV, prompt=secret, response=secret, error=secret)
         assert secret not in output
         assert parse_osc(output) == {"v": 1, "agent": "hermes", "event": expected}
+    assert parse_osc(capture_hermes(module.on_session_end, PROTOCOL_ENV, failed=False, payload=secret)) == {
+        "v": 1, "agent": "hermes", "event": "stop",
+    }
+    assert parse_osc(capture_hermes(module.on_session_end, PROTOCOL_ENV, failed=True, payload=secret)) == {
+        "v": 1, "agent": "hermes", "event": "stop_failure",
+    }
     for env in ({}, {"WARP_CLI_AGENT_PROTOCOL_VERSION": "2", "WARP_CLIENT_VERSION": "test"}, {"WARP_CLI_AGENT_PROTOCOL_VERSION": "1"}):
         assert capture_hermes(module.pre_llm_call, env, prompt=secret) == ""
 
     registered = {}
     module.register(type("Context", (), {"register_hook": lambda _, name, callback: registered.setdefault(name, callback)})())
-    assert set(registered) == {"pre_llm_call", "post_llm_call", "pre_approval_request", "post_approval_response"}
-    assert "api_request_error" not in registered
+    declared = hermes_declared_hooks()
+    assert declared == set(registered) == {
+        "on_session_start", "pre_llm_call", "on_session_end", "pre_approval_request", "post_approval_response",
+    }
+    assert "post_llm_call" not in declared and "post_llm_call" not in registered
 
 
 def install(args, env):
@@ -341,10 +457,11 @@ def test_installer_target_isolation_backup_byte_stability_and_all():
 
 
 def test_shipped_hermes_plugin_doctor():
-    subprocess.run(
+    result = subprocess.run(
         ["hermes", "plugins", "doctor", str(ADAPTER / "hermes"), "--ci"],
         text=True, capture_output=True, check=True,
     )
+    assert "WARN:" not in result.stdout
 
 
 def main():
