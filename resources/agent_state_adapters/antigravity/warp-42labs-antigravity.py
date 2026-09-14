@@ -6,6 +6,14 @@ import sys
 
 OSC = "\033]777;notify;warp://cli-agent;"
 BEL = "\007"
+FAILURE_REASONS = {
+    "ERROR",
+    "HALTED_STEP",
+    "MAX_INVOCATIONS",
+    "MAX_FORCED_INVOCATIONS",
+    "MAX_TOKEN_BUDGET_EXCEEDED",
+    "MAX_STEPS_EXCEEDED",
+}
 
 
 def compatible():
@@ -39,12 +47,12 @@ def main():
             print(json.dumps({"decision": "continue", "reason": "Background work is still active."}))
         else:
             reason = payload.get("terminationReason")
-            if reason == "model_stop":
+            if payload.get("error") or (
+                isinstance(reason, str) and reason.upper() in FAILURE_REASONS
+            ):
+                emit("stop_failure")
+            else:
                 emit("stop")
-            elif reason in ("error", "max_steps_exceeded") or not reason:
-                emit("stop_failure")
-            elif reason not in ("model_stop",):
-                emit("stop_failure")
             print("{}")
     else:
         print("{}")
